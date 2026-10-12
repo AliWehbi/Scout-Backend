@@ -141,6 +141,7 @@ class GuardianLinkWriteSerializer(serializers.Serializer):
 
 class MemberListSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(read_only=True)
+    name_ar = serializers.CharField(read_only=True)
     age = serializers.IntegerField(read_only=True)
     units = UnitMembershipSerializer(source="unit_memberships", many=True, read_only=True)
     guardians = serializers.SerializerMethodField()
@@ -154,6 +155,8 @@ class MemberListSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "full_name",
+            "first_name_ar",
+            "last_name_ar",
             "name_ar",
             "kind",
             "status",
@@ -233,7 +236,8 @@ class MemberWriteSerializer(serializers.ModelSerializer):
         fields = [
             "first_name",
             "last_name",
-            "name_ar",
+            "first_name_ar",
+            "last_name_ar",
             "date_of_birth",
             "gender",
             "kind",

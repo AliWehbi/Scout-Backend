@@ -5,6 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
 
+from apps.events.services import create_default_event_types
 from apps.members import services as member_services
 from apps.permissions.models import PermissionGrant, RoleAssignment
 from apps.permissions.service import create_default_roles
@@ -45,6 +46,7 @@ def signup_organization(*, organization: dict, admin: dict, units: list[dict], b
     membership = OrgMembership.objects.create(organization=org, user=user, is_owner=True)
     RoleAssignment.objects.create(membership=membership, role=roles["org_admin"], assigned_by=user)
     member_services.ensure_member(membership, kind="adult")
+    create_default_event_types(org)
     for unit in units:
         Unit.objects.create(organization=org, **unit)
     return membership

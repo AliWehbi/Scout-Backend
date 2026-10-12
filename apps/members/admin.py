@@ -21,7 +21,7 @@ class GuardianLinkInline(admin.TabularInline):
 class MemberAdmin(admin.ModelAdmin):
     list_display = ("first_name", "last_name", "organization", "kind", "status", "membership")
     list_filter = ("kind", "status")
-    search_fields = ("first_name", "last_name", "name_ar")
+    search_fields = ("first_name", "last_name", "first_name_ar", "last_name_ar")
     inlines = [GuardianLinkInline]
 
 

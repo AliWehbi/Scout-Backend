@@ -27,6 +27,8 @@ MAX_ROWS = 2000
 TARGETS = [
     "first_name",
     "last_name",
+    "first_name_ar",
+    "last_name_ar",
     "name_ar",
     "date_of_birth",
     "gender",
@@ -44,22 +46,55 @@ TARGETS = [
 ]
 
 SYNONYMS = {
-    "first_name": ["first name", "firstname", "first", "given name", "name", "الاسم", "الاسم الأول"],
-    "last_name": ["last name", "lastname", "surname", "family name", "اسم العائلة", "الشهرة"],
-    "name_ar": ["arabic name", "name (arabic)", "الاسم بالعربية"],
+    "first_name": [
+        "first name",
+        "firstname",
+        "first",
+        "given name",
+        "name",
+        "الاسم",
+        "الاسم الأول",
+        "الاسم الأول (بالإنجليزية)",
+    ],
+    "last_name": [
+        "last name",
+        "lastname",
+        "surname",
+        "family name",
+        "اسم العائلة",
+        "الشهرة",
+        "اسم العائلة (بالإنجليزية)",
+    ],
+    "first_name_ar": ["first name (arabic)", "arabic first name", "الاسم الأول بالعربية"],
+    "last_name_ar": ["last name (arabic)", "arabic last name", "اسم العائلة بالعربية"],
+    # A single full Arabic name column is split into first and last name.
+    "name_ar": ["arabic name", "name (arabic)", "full name (arabic)", "الاسم بالعربية"],
     "date_of_birth": ["dob", "date of birth", "birth date", "birthdate", "birthday", "تاريخ الميلاد"],
     "gender": ["gender", "sex", "الجنس"],
-    "kind": ["type", "member type", "kind"],
+    "kind": ["type", "member type", "kind", "النوع"],
     "unit": ["unit", "section", "group", "الوحدة", "المرحلة"],
-    "position": ["position", "role in unit", "الموقع"],
+    "position": ["position", "role in unit", "الموقع", "المنصب"],
     "phone": ["phone", "mobile", "telephone", "الهاتف"],
-    "email": ["email", "e-mail", "البريد"],
+    "email": ["email", "e-mail", "البريد", "البريد الإلكتروني"],
     "address": ["address", "العنوان"],
     "guardian_name": ["parent", "guardian", "parent name", "guardian name", "ولي الأمر", "اسم ولي الأمر"],
     "guardian_phone": ["parent mobile", "parent phone", "guardian phone", "هاتف ولي الأمر"],
     "guardian_email": ["parent email", "guardian email", "بريد ولي الأمر"],
     "guardian_relationship": ["relationship", "relation", "صلة القرابة"],
     "allergies": ["allergies", "allergy", "الحساسية"],
+}
+
+# Arabic spellings accepted for coded values (the sample file uses these in Arabic).
+ARABIC_POSITIONS = {"قائد": "leader", "قائد مساعد": "assistant", "عريف": "patrol_leader", "عضو": "member"}
+ARABIC_RELATIONSHIPS = {
+    "أم": "mother",
+    "أب": "father",
+    "ولي أمر": "guardian",
+    "جد": "grandparent",
+    "جدة": "grandparent",
+    "أخ": "sibling",
+    "أخت": "sibling",
+    "آخر": "other",
 }
 
 DATE_FORMATS = ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%Y", "%m/%d/%Y"]
@@ -162,7 +197,9 @@ class Importer:
             errors["first_name"] = _("First name is required.")
         cleaned["first_name"] = first
         cleaned["last_name"] = values.get("last_name", "").strip()
-        cleaned["name_ar"] = values.get("name_ar", "").strip()
+        first_ar, _sep, last_ar = values.get("name_ar", "").strip().partition(" ")
+        cleaned["first_name_ar"] = values.get("first_name_ar", "").strip() or first_ar
+        cleaned["last_name_ar"] = values.get("last_name_ar", "").strip() or last_ar.strip()
         if values.get("date_of_birth"):
             dob = _parse_date(values["date_of_birth"])
             if dob is None or dob > date.today():
@@ -177,18 +214,20 @@ class Importer:
             else:
                 errors["gender"] = _("Use male or female.")
         kind = _norm(values.get("kind"))
-        cleaned["kind"] = MemberKind.ADULT if kind in ("adult", "leader", "قائد") else MemberKind.YOUTH
+        cleaned["kind"] = MemberKind.ADULT if kind in ("adult", "leader", "قائد", "بالغ") else MemberKind.YOUTH
         unit_name = values.get("unit", "").strip()
         if unit_name:
             unit = self.units.get(_norm(unit_name))
             if unit is None:
                 errors["unit"] = _("No unit called “%(name)s” — pick one or create it.") % {"name": unit_name}
             cleaned["unit"] = unit
-        position = _norm(values.get("position")).replace(" ", "_")
+        position = _norm(values.get("position"))
+        position = ARABIC_POSITIONS.get(position, position).replace(" ", "_")
         cleaned["position"] = position if position in UnitPosition.values else UnitPosition.MEMBER
         for key in ("phone", "email", "address", "guardian_name", "guardian_phone", "guardian_email"):
             cleaned[key] = values.get(key, "").strip()
         rel = _norm(values.get("guardian_relationship"))
+        rel = ARABIC_RELATIONSHIPS.get(rel, rel)
         cleaned["guardian_relationship"] = rel if rel in Relationship.values else Relationship.GUARDIAN
         allergies = [a.strip() for a in values.get("allergies", "").replace(";", ",").split(",") if a.strip()]
         cleaned["allergies"] = [{"name": a, "severity": "moderate", "notes": ""} for a in allergies]
@@ -272,7 +311,16 @@ class Importer:
                 continue
             if duplicate and decision == "update":
                 member = duplicate
-                for field in ("last_name", "name_ar", "date_of_birth", "gender", "phone", "email", "address"):
+                for field in (
+                    "last_name",
+                    "first_name_ar",
+                    "last_name_ar",
+                    "date_of_birth",
+                    "gender",
+                    "phone",
+                    "email",
+                    "address",
+                ):
                     if cleaned.get(field):
                         setattr(member, field, cleaned[field])
                 member.custom_data = {**(member.custom_data or {}), **cleaned["custom_data"]}
@@ -286,7 +334,8 @@ class Importer:
                         for k in (
                             "first_name",
                             "last_name",
-                            "name_ar",
+                            "first_name_ar",
+                            "last_name_ar",
                             "date_of_birth",
                             "phone",
                             "email",

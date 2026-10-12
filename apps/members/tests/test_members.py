@@ -200,7 +200,14 @@ def family(org, world):
 
 def test_parent_sees_only_own_children(org, family, client_for):
     client = client_for(family["login"].user, org["org"])
-    assert client.get("/api/v1/my/family/").data == {"is_guardian": True, "children": 1, "pending_requests": 0}
+    assert client.get("/api/v1/my/family/").data == {
+        "is_guardian": True,
+        "children": 1,
+        "pending_requests": 0,
+        "has_events": True,
+        "events_pending": 0,
+        "gear_out": 0,
+    }
     kids = client.get("/api/v1/my/family/children/").data
     assert [k["first_name"] for k in kids] == ["Jad"]
     assert "custom.uniform_size" in kids[0]["editable_fields"] and "custom.scarf" not in kids[0]["editable_fields"]
@@ -454,3 +461,67 @@ def test_certifications_and_dashboard(org, client_for):
     assert dash["counts"]["missing_info"] == 2
     cert_id = res.data["id"]
     assert client.delete(f"/api/v1/members/{org['loner'].pk}/certifications/{cert_id}/").status_code == 204
+
+
+def test_arabic_name_parts(org, client_for):
+    client = client_for(org["admin"].user, org["org"])
+    res = client.post(
+        "/api/v1/members/",
+        {"first_name": "Lea", "first_name_ar": "ليا", "last_name_ar": "حداد", "units": [{"unit": org["cubs"].pk}]},
+        format="json",
+    )
+    assert res.status_code == 201, res.data
+    detail = client.get(f"/api/v1/members/{res.data['id']}/").data
+    assert (detail["first_name_ar"], detail["last_name_ar"], detail["name_ar"]) == ("ليا", "حداد", "ليا حداد")
+    assert client.get("/api/v1/members/", {"search": "حداد"}).data["count"] == 1
+
+    # A single full Arabic name column is split; separate columns are used as given.
+    text = "First name,Arabic name,Last name (Arabic)\nElie,إيلي منصور,\nJana,جنى,خليل\n"
+    import json
+
+    preview = client.post("/api/v1/members/import/preview/", {"file": upload(text)}, format="multipart").data
+    mapping = preview["mapping"]
+    assert mapping == {"First name": "first_name", "Arabic name": "name_ar", "Last name (Arabic)": "last_name_ar"}
+    client.post(
+        "/api/v1/members/import/commit/",
+        {"file": upload(text), "mapping": json.dumps(mapping), "decisions": "{}"},
+        format="multipart",
+    )
+    elie, jana = Member.objects.get(first_name="Elie"), Member.objects.get(first_name="Jana")
+    assert (elie.first_name_ar, elie.last_name_ar) == ("إيلي", "منصور")
+    assert (jana.first_name_ar, jana.last_name_ar) == ("جنى", "خليل")
+
+
+@pytest.mark.parametrize("lang", ["en", "ar"])
+def test_import_sample_round_trips(org, client_for, lang):
+    CustomField.objects.create(
+        organization=org["org"],
+        key="uniform_size",
+        label_en="Uniform size",
+        label_ar="مقاس الزي",
+        field_type="choice",
+        options=["S", "M"],
+    )
+    client = client_for(org["admin"].user, org["org"])
+    res = client.get("/api/v1/members/import/sample/", HTTP_ACCEPT_LANGUAGE=lang)
+    assert res.status_code == 200
+    assert res["Content-Type"].startswith("application/vnd.openxmlformats")
+    sample = SimpleUploadedFile("sample.xlsx", res.content)
+    preview = client.post("/api/v1/members/import/preview/", {"file": sample}, format="multipart").data
+    assert all(preview["mapping"].values()), preview["mapping"]
+    assert "custom.uniform_size" in preview["mapping"].values()
+    assert preview["summary"]["ready"] == 2, preview["rows"]
+    import json
+
+    sample.seek(0)
+    client.post(
+        "/api/v1/members/import/commit/",
+        {"file": sample, "mapping": json.dumps(preview["mapping"]), "decisions": "{}"},
+        format="multipart",
+    )
+    jana = Member.objects.get(first_name="Jana")
+    assert (jana.first_name_ar, jana.gender, jana.custom_data) == ("جنى", "female", {"uniform_size": "S"})
+    assert jana.unit_memberships.get().position == "patrol_leader"
+    assert jana.guardian_links.get().relationship == "father"
+
+    assert client_for(org["karim"].user, org["org"]).get("/api/v1/members/import/sample/").status_code == 403

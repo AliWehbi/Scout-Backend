@@ -2,7 +2,7 @@
 
 Multi-tenant API for scout organizations: organizations, users (username **or** email login, email optional),
 units and patrols, members (people with an optional login), guardians, medical info, custom fields, parent change
-requests, attendance, roles + per-user permission grants, invitations, theme settings and an audit log.
+requests, events (types, invitations, replies, parent signatures, iCal feed), attendance, roles + per-user permission grants, invitations, theme settings and an audit log.
 
 ## Quick start
 
@@ -26,7 +26,7 @@ API docs: `/api/docs/` (Swagger) · schema: `/api/schema/` · admin: `/admin/` (
 ## Checks
 
 ```bash
-pytest              # 85 tests: auth, tenant isolation, permissions, invitations, settings, members, attendance
+pytest              # 104 tests: auth, tenant isolation, permissions, invitations, settings, members, attendance, events, inventory
 ruff check . && ruff format --check .
 ```
 
@@ -40,7 +40,9 @@ ruff check . && ruff format --check .
 | `apps/permissions` | Permission catalog (`catalog.py`), `Role`, `RoleAssignment`, `PermissionGrant`, `PermissionService`, DRF permission classes |
 | `apps/units` | `Unit`, `Patrol`, `UnitMembership` (a member can be in several units, each with a position and patrol) |
 | `apps/members` | `Member` (person, optional login), `Guardian` + `GuardianLink`, `MedicalInfo`, `Certification`, `CustomField`, `ChangeRequest`; import (`importer.py`), parent portal views |
-| `apps/attendance` | `Session`, `AttendanceRecord`, roster and trend endpoints |
+| `apps/attendance` | `Session` (a standalone session of a unit, or one day of an event), `AttendanceRecord` (the note is the reason for an excused absence), roster, trend and report endpoints |
+| `apps/events` | `EventType`, `Event`, `EventInvitation` (reply + waitlist), `ConsentSignature`, `CalendarFeed`; rules in `services.py` |
+| `apps/inventory` | `Item` (tracked / counted / consumable), `Piece`, `Category`, `Location`, `ExternalBorrower`, `Loan` + `LoanLine` (who/when out and in), `Reservation` (event gear), `ItemLog` (history), `StockTake`; rules in `services.py` |
 | `apps/audit` | `AuditLog` + `log_action()` |
 
 ### Multi-tenancy
@@ -74,9 +76,32 @@ Shared database, `organization` FK on tenant data. The client sends `X-Organizat
 `auth/invitations/{token-or-code}/` (+ `accept/`), `me/` (+ `password/`, `organizations/`, `permissions/`),
 `org/`, `org/settings/`, `dashboard/summary/`, `permissions/catalog/`, `users/` (+ `counts/`, `{id}/roles|units|permissions|set-password|invitation/`),
 `units/`, `patrols/`, `roles/`, `audit-logs/`,
-`members/` (+ `counts/`, `export/`, `bulk/`, `import/preview|commit/`, `{id}/units|guardians|medical|certifications|attendance|give-access/`),
+`members/` (+ `counts/`, `export/`, `bulk/`, `import/preview|commit|sample/`, `{id}/units|guardians|medical|certifications|attendance|give-access/`),
 `custom-fields/` (+ `reorder/`), `change-requests/` (+ `counts/`, `{id}/approve|reject/`),
-`attendance/sessions/` (+ `trend/`, `{id}/records/`), `my/family/` (+ `children/`, `children/{id}/`, `requests/`).
+`attendance/sessions/` (+ `trend/`, `{id}/records/`), `attendance/report/`, `my/family/` (+ `children/`, `children/{id}/`, `requests/`),
+`event-types/`, `events/` (+ `{id}/publish|cancel|invite|invitations|attendance/`, `{id}/invitations/{inv}/respond/`),
+`my/events/` (+ `invitations/{id}/respond|sign/`), `my/calendar/`, `calendar/{token}.ics` (public, the token is the credential),
+`inventory/items/` (+ `{id}/history|pieces|pieces/{p}/condition|stock|availability/`), `inventory/loans/` (+ `{id}/return/`),
+`inventory/categories/`, `inventory/locations/`, `inventory/external-borrowers/`, `inventory/stocktakes/` (+ `{id}/finish/`),
+`inventory/summary/`, `inventory/lookup/`, `inventory/borrowers/`, `events/{id}/gear/` (+ `check-out/`), `my/gear/`.
+
+### Inventory
+- `inventory.view`, `inventory.check_out` and `inventory.manage` are organization-wide (`SHARED_STORE_PERMISSIONS` in
+  the catalog): they apply everywhere even when they come from a role assigned for one unit or a unit-limited grant.
+- Only physically impossible things are refused (lending a piece that is already out, more than is in the store, or a
+  lost/retired piece). Damaged pieces and booking conflicts return `warnings` instead.
+- Foreign keys from loans and history use `RESTRICT`, so items, members and events with history can't be deleted on
+  their own, but deleting a whole organization still works.
+
+### Events
+- Seeing events needs `events.view`; creating and editing needs `events.manage` for **every** unit of the event
+  (an event with no units is organization-wide and needs it organization-wide); check-in needs `events.check_in`
+  for one of its units.
+- Families only see published events they are invited to. Parents see a child's invitation when it was sent to
+  parents too, which is forced on for events that need a signature.
+- Attendance is taken once per event day: the first check-in of a day creates a `Session` linked to the event, so
+  reports treat event days and standalone sessions the same way.
+- `members_for_invite` includes everyone in the chosen units, leaders too.
 
 Known gap: plain `APIView` endpoints (auth, me, org settings, dashboard) have no request/response annotations yet,
 so drf-spectacular leaves them out of the generated schema.

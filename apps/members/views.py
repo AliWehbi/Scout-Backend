@@ -40,6 +40,7 @@ from .models import (
     MemberStatus,
     RequestStatus,
 )
+from .sample import build_sample
 from .serializers import (
     BulkActionSerializer,
     CertificationSerializer,
@@ -84,10 +85,13 @@ def attendance_summary(member: Member, limit: int = 10) -> dict:
         "recent": [
             {
                 "session_id": r.session_id,
+                "event_id": r.session.event_id,
                 "title": r.session.title,
                 "date": r.session.date,
-                "unit": r.session.unit.name_en,
+                "unit": r.session.unit.name_en if r.session.unit else "",
+                "is_mandatory": r.session.is_mandatory,
                 "status": r.status,
+                "note": r.note,
             }
             for r in records
         ],
@@ -102,7 +106,7 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
     permission_classes = [permissions.IsAuthenticated, IsOrgMember]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
-    search_fields = ["first_name", "last_name", "name_ar", "guardian_links__guardian__first_name"]
+    search_fields = ["first_name", "last_name", "first_name_ar", "last_name_ar", "guardian_links__guardian__first_name"]
     ordering_fields = ["first_name", "last_name", "date_of_birth", "created_at"]
     http_method_names = ["get", "post", "patch", "put", "delete"]
 
@@ -461,6 +465,17 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def import_preview(self, request):
         return Response(self._importer(request).preview())
 
+    @action(detail=False, methods=["get"], url_path="import/sample")
+    def import_sample(self, request):
+        if not self.service.has_perm("members.edit"):
+            raise PermissionDenied(_("Importing needs “Edit members” for the whole organization."))
+        response = HttpResponse(
+            build_sample(self.organization, request.LANGUAGE_CODE),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = 'attachment; filename="members-import-sample.xlsx"'
+        return response
+
     @action(detail=False, methods=["post"], url_path="import/commit")
     def import_commit(self, request):
         importer = self._importer(request)
@@ -482,7 +497,8 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             [
                 "First name",
                 "Last name",
-                "Arabic name",
+                "First name (Arabic)",
+                "Last name (Arabic)",
                 "Date of birth",
                 "Gender",
                 "Type",
@@ -500,7 +516,8 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 [
                     m.first_name,
                     m.last_name,
-                    m.name_ar,
+                    m.first_name_ar,
+                    m.last_name_ar,
                     m.date_of_birth or "",
                     m.gender,
                     m.kind,
@@ -656,6 +673,8 @@ def child_payload(member: Member, organization, guardian: Guardian) -> dict:
         "first_name": member.first_name,
         "last_name": member.last_name,
         "full_name": member.full_name,
+        "first_name_ar": member.first_name_ar,
+        "last_name_ar": member.last_name_ar,
         "name_ar": member.name_ar,
         "date_of_birth": member.date_of_birth,
         "age": member.age,
@@ -755,13 +774,36 @@ class MyFamilyView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsOrgMember]
 
     def get(self, request):
+        from apps.events.services import family_invitations, my_people, pending_actions
+        from apps.inventory.models import BorrowerType, Loan
+
+        def gear_out(membership) -> int:
+            me, _guardian, children = my_people(membership)
+            ids = list(children) + ([me.pk] if me else [])
+            return Loan.objects.filter(
+                organization=membership.organization,
+                borrower_type=BorrowerType.MEMBER,
+                member_id__in=ids,
+                closed_at__isnull=True,
+            ).count()
+
+        membership = get_active_membership(request)
         guardian = my_guardian(request)
+        events = {
+            # Members with their own login and parents both get the "Events" page.
+            "has_events": guardian is not None
+            or Member.objects.filter(membership=membership).exists()
+            and family_invitations(membership).exists(),
+            "events_pending": pending_actions(membership),
+            "gear_out": gear_out(membership),
+        }
         if guardian is None:
-            return Response({"is_guardian": False, "children": 0, "pending_requests": 0})
+            return Response({"is_guardian": False, "children": 0, "pending_requests": 0, **events})
         return Response(
             {
                 "is_guardian": True,
                 "children": guardian.links.count(),
                 "pending_requests": guardian.requests.filter(status=RequestStatus.PENDING).count(),
+                **events,
             }
         )

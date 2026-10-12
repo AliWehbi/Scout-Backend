@@ -6,18 +6,29 @@ from apps.core.models import TenantModel
 
 
 class Session(TenantModel):
-    """A unit meeting (or outing) where attendance is taken."""
+    """
+    One occasion where attendance is taken. Either a standalone session of a unit (no event),
+    or one day of an event (multi-day events get one session per day, created at check-in).
+    """
 
-    unit = models.ForeignKey("units.Unit", on_delete=models.CASCADE, related_name="sessions")
+    unit = models.ForeignKey("units.Unit", on_delete=models.CASCADE, related_name="sessions", null=True, blank=True)
+    event = models.ForeignKey("events.Event", on_delete=models.CASCADE, related_name="sessions", null=True, blank=True)
     title = models.CharField(max_length=150)
     date = models.DateField()
     start_time = models.TimeField(null=True, blank=True)
     end_time = models.TimeField(null=True, blank=True)
     location = models.CharField(max_length=200, blank=True)
+    is_mandatory = models.BooleanField(default=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+")
 
     class Meta:
         ordering = ["-date", "-start_time", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["event", "date"], name="session_event_day_unique"),
+            models.CheckConstraint(
+                condition=models.Q(unit__isnull=False) | models.Q(event__isnull=False), name="session_unit_or_event"
+            ),
+        ]
 
     def __str__(self):
         return f"{self.title} ({self.date})"

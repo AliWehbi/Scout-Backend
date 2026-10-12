@@ -58,8 +58,9 @@ CATALOG: tuple[PermissionGroup, ...] = (
         "inventory",
         _("Inventory"),
         (
-            PermissionDef("inventory.view", _("View inventory"), True),
-            PermissionDef("inventory.manage", _("Manage inventory"), True),
+            PermissionDef("inventory.view", _("View inventory"), False),
+            PermissionDef("inventory.check_out", _("Check out & return equipment"), False),
+            PermissionDef("inventory.manage", _("Manage inventory"), False),
         ),
     ),
     PermissionGroup(
@@ -77,6 +78,10 @@ CATALOG: tuple[PermissionGroup, ...] = (
 )
 
 ALL_PERMISSIONS: dict[str, PermissionDef] = {p.codename: p for g in CATALOG for p in g.permissions}
+
+# The equipment store is shared by the whole organization, so these apply organization-wide
+# even when they come from a role assigned for one unit (e.g. a Cubs unit leader).
+SHARED_STORE_PERMISSIONS = frozenset({"inventory.view", "inventory.check_out", "inventory.manage"})
 PERMISSION_GROUP: dict[str, str] = {p.codename: g.key for g in CATALOG for p in g.permissions}
 
 
@@ -100,6 +105,7 @@ DEFAULT_ROLES: tuple[dict, ...] = (
             "events.manage",
             "events.check_in",
             "inventory.view",
+            "inventory.check_out",
         ),
     },
     {
@@ -118,7 +124,7 @@ DEFAULT_ROLES: tuple[dict, ...] = (
         "key": "quartermaster",
         "name": _("Quartermaster"),
         "description": _("Looks after equipment and stores."),
-        "permissions": ("inventory.view", "inventory.manage"),
+        "permissions": ("inventory.view", "inventory.check_out", "inventory.manage"),
     },
     {
         "key": "parent",

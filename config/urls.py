@@ -7,8 +7,10 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.accounts import views as account_views
-from apps.attendance.views import SessionViewSet
+from apps.attendance.views import AttendanceReportView, SessionViewSet
 from apps.audit.views import AuditLogViewSet
+from apps.events import views as event_views
+from apps.inventory import views as inventory_views
 from apps.members import views as member_views
 from apps.organizations import views as org_views
 from apps.permissions.views import PermissionCatalogView, RoleViewSet
@@ -24,6 +26,14 @@ router.register("custom-fields", member_views.CustomFieldViewSet, basename="cust
 router.register("change-requests", member_views.ChangeRequestViewSet, basename="change-request")
 router.register("patrols", PatrolViewSet, basename="patrol")
 router.register("attendance/sessions", SessionViewSet, basename="session")
+router.register("event-types", event_views.EventTypeViewSet, basename="event-type")
+router.register("events", event_views.EventViewSet, basename="event")
+router.register("inventory/categories", inventory_views.CategoryViewSet, basename="inventory-category")
+router.register("inventory/locations", inventory_views.LocationViewSet, basename="inventory-location")
+router.register("inventory/external-borrowers", inventory_views.ExternalBorrowerViewSet, basename="inventory-external")
+router.register("inventory/items", inventory_views.ItemViewSet, basename="inventory-item")
+router.register("inventory/loans", inventory_views.LoanViewSet, basename="inventory-loan")
+router.register("inventory/stocktakes", inventory_views.StockTakeViewSet, basename="inventory-stocktake")
 
 auth_patterns = [
     path("login/", account_views.LoginView.as_view(), name="login"),
@@ -52,8 +62,28 @@ family_patterns = [
     path("requests/", member_views.MyRequestsView.as_view(), name="my-requests"),
 ]
 
+my_event_patterns = [
+    path("", event_views.MyEventsView.as_view(), name="my-events"),
+    path("invitations/<int:pk>/respond/", event_views.MyInvitationRespondView.as_view(), name="my-event-respond"),
+    path("invitations/<int:pk>/sign/", event_views.MyInvitationSignView.as_view(), name="my-event-sign"),
+]
+
 api_v1 = [
     path("my/family/", include(family_patterns)),
+    path("my/events/", include(my_event_patterns)),
+    path("my/calendar/", event_views.MyCalendarView.as_view(), name="my-calendar"),
+    path("calendar/<str:token>.ics", event_views.CalendarFeedView.as_view(), name="calendar-feed"),
+    path("attendance/report/", AttendanceReportView.as_view(), name="attendance-report"),
+    path("inventory/summary/", inventory_views.SummaryView.as_view(), name="inventory-summary"),
+    path("inventory/lookup/", inventory_views.LookupView.as_view(), name="inventory-lookup"),
+    path("inventory/borrowers/", inventory_views.BorrowerOptionsView.as_view(), name="inventory-borrowers"),
+    path("events/<int:event_id>/gear/", inventory_views.EventGearView.as_view(), name="event-gear"),
+    path(
+        "events/<int:event_id>/gear/check-out/",
+        inventory_views.EventGearCheckOutView.as_view(),
+        name="event-gear-checkout",
+    ),
+    path("my/gear/", inventory_views.MyGearView.as_view(), name="my-gear"),
     path("auth/", include(auth_patterns)),
     path("me/", include(me_patterns)),
     path("org/", org_views.CurrentOrganizationView.as_view(), name="org"),

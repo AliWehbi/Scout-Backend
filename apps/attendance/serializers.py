@@ -12,8 +12,20 @@ class SessionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Session
-        fields = ["id", "unit", "title", "date", "start_time", "end_time", "location", "counts", "created_at"]
-        read_only_fields = ["id", "created_at"]
+        fields = [
+            "id",
+            "unit",
+            "event",
+            "title",
+            "date",
+            "start_time",
+            "end_time",
+            "location",
+            "is_mandatory",
+            "counts",
+            "created_at",
+        ]
+        read_only_fields = ["id", "event", "created_at"]
 
     def validate_unit(self, unit):
         if unit.organization_id != self.context["organization"].pk:

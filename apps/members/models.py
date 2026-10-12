@@ -35,7 +35,8 @@ class Member(TenantModel):
     )
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150, blank=True)
-    name_ar = models.CharField(max_length=200, blank=True, help_text=_("Full name in Arabic"))
+    first_name_ar = models.CharField(max_length=150, blank=True)
+    last_name_ar = models.CharField(max_length=150, blank=True)
     date_of_birth = models.DateField(null=True, blank=True)
     gender = models.CharField(max_length=10, choices=Gender.choices, blank=True)
     photo = models.ImageField(upload_to="member-photos/", blank=True, null=True)
@@ -55,6 +56,11 @@ class Member(TenantModel):
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
+
+    @property
+    def name_ar(self) -> str:
+        """Full name in Arabic, built from the two Arabic name parts."""
+        return f"{self.first_name_ar} {self.last_name_ar}".strip()
 
     @property
     def age(self) -> int | None:
