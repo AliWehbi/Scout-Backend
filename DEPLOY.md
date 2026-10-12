@@ -71,16 +71,16 @@ digits, `-` and `_`. `DJANGO_ALLOWED_HOSTS` is the API domain;
 
 ### 3. Switch over from the old backend
 
-The old backend (`~/scout_backend`, repo `scout_backend`) also listens on `127.0.0.1:8001`.
+The old backend (`/home/scout_backend`, repo `scout_backend`) also listens on `127.0.0.1:8001`.
 
 1. **Stop the old auto-deploy**: GitHub → `scout_backend` → Actions → "Deploy to production" →
    ⋯ → Disable workflow. Otherwise a push there would bring the old app back on port 8001.
 2. **Stop the old stack**, keeping its data as a backup (no `-v`):
    ```bash
-   cd ~/scout_backend && docker compose down
+   cd /home/scout_backend && docker compose down
    ```
 3. **Host nginx**: in the API site (e.g. `/etc/nginx/sites-available/scout-api`) remove the
-   `location /static/` and `location /media/` blocks (they point at the old folder; the new
+   `location /static/` and `location /media/` blocks (they point at `/home/scout_backend/data/`; the new
    stack serves both itself), keep the `proxy_pass http://127.0.0.1:8001;` block and set
    `client_max_body_size 25M;`. The certbot TLS lines stay as they are.
    ```bash
