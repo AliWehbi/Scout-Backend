@@ -49,6 +49,8 @@ INSTALLED_APPS = [
     "apps.permissions",
     "apps.units",
     "apps.audit",
+    "apps.members",
+    "apps.attendance",
 ]
 
 MIDDLEWARE = [

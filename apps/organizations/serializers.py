@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model, password_validation
+from django.core.exceptions import ObjectDoesNotExist
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
@@ -152,12 +153,27 @@ class InvitationSerializer(serializers.ModelSerializer):
 class MemberSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     roles = RoleAssignmentSerializer(source="role_assignments", many=True, read_only=True)
-    units = UnitMembershipSerializer(source="unit_memberships", many=True, read_only=True)
+    units = serializers.SerializerMethodField()
+    member_id = serializers.SerializerMethodField()
     invitation = serializers.SerializerMethodField()
 
     class Meta:
         model = OrgMembership
-        fields = ["id", "user", "status", "is_owner", "roles", "units", "invitation", "created_at"]
+        fields = ["id", "user", "status", "is_owner", "member_id", "roles", "units", "invitation", "created_at"]
+
+    def _member(self, obj):
+        try:
+            return obj.member
+        except ObjectDoesNotExist:
+            return None
+
+    def get_member_id(self, obj):
+        member = self._member(obj)
+        return member.pk if member else None
+
+    def get_units(self, obj):
+        member = self._member(obj)
+        return UnitMembershipSerializer(member.unit_memberships.all(), many=True).data if member else []
 
     def get_invitation(self, obj):
         if obj.status != MembershipStatus.INVITED or not self.context.get("can_manage_users"):

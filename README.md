@@ -1,7 +1,8 @@
 # Scout Dashboard — Backend (Django + DRF)
 
 Multi-tenant API for scout organizations: organizations, users (username **or** email login, email optional),
-units, roles + per-user permission grants, invitations, theme settings and an audit log.
+units and patrols, members (people with an optional login), guardians, medical info, custom fields, parent change
+requests, attendance, roles + per-user permission grants, invitations, theme settings and an audit log.
 
 ## Quick start
 
@@ -15,7 +16,7 @@ python manage.py runserver      # http://127.0.0.1:8000
 ```
 
 Demo sign-ins (password `ScoutDemo!2026`): `rania` (owner/admin), `karim.h` (unit leader with extra grants),
-`omar.t` (scout, no email). `seed_demo --reset` recreates the demo data.
+`maya.s` (parent of Jad and Yara, has a pending change request). `seed_demo --reset` recreates the demo data.
 
 Postgres instead of SQLite: `docker compose up -d db` and set
 `DATABASE_URL=postgres://scout:scout@localhost:5432/scout` in `.env`.
@@ -25,7 +26,7 @@ API docs: `/api/docs/` (Swagger) · schema: `/api/schema/` · admin: `/admin/` (
 ## Checks
 
 ```bash
-pytest              # 61 tests: auth, tenant isolation, permissions, invitations, settings
+pytest              # 85 tests: auth, tenant isolation, permissions, invitations, settings, members, attendance
 ruff check . && ruff format --check .
 ```
 
@@ -37,7 +38,9 @@ ruff check . && ruff format --check .
 | `apps/accounts` | Custom `User` (username required, email optional, both case-insensitive unique), username-or-email auth backend, JWT login, password reset, email verification |
 | `apps/organizations` | `Organization`, `OrganizationSettings` (theme color overrides), `OrgMembership`, `Invitation`, sign-up, members API, dashboard summary, `seed_demo` |
 | `apps/permissions` | Permission catalog (`catalog.py`), `Role`, `RoleAssignment`, `PermissionGrant`, `PermissionService`, DRF permission classes |
-| `apps/units` | `Unit`, `UnitMembership` (a person can be in several units, each with a position) |
+| `apps/units` | `Unit`, `Patrol`, `UnitMembership` (a member can be in several units, each with a position and patrol) |
+| `apps/members` | `Member` (person, optional login), `Guardian` + `GuardianLink`, `MedicalInfo`, `Certification`, `CustomField`, `ChangeRequest`; import (`importer.py`), parent portal views |
+| `apps/attendance` | `Session`, `AttendanceRecord`, roster and trend endpoints |
 | `apps/audit` | `AuditLog` + `log_action()` |
 
 ### Multi-tenancy
@@ -55,11 +58,25 @@ Shared database, `organization` FK on tenant data. The client sends `X-Organizat
 - Organization owners always have every permission.
 - Views declare `permission_map = {action: codename}` and use `HasOrgPermission`.
 
+### Members, logins and guardians
+- A `Member` is a person. Linking a login is optional (`Member.membership`). Roles and grants belong to the login
+  (`OrgMembership`); unit memberships belong to the member.
+- A `Guardian` is a contact for one or more members and may also have a login (the parent portal).
+- Member-related permissions are unit-scoped: a leader only sees members of units where they hold `members.view`.
+  Medical info needs `members.view_medical`, and each read is logged as `person.medical_viewed`.
+- Parents never write directly. `POST my/family/children/{id}/` creates a `ChangeRequest` with one item per field.
+  A leader with `members.edit` approves all items, some items (`partial`) or none, and only approved items are applied.
+- Migration `members.0002` converts Phase 1 data: logins with only the parent role become guardians, and everyone
+  else becomes a member with their unit memberships moved over.
+
 ### Main endpoints (`/api/v1/`)
 `auth/login|refresh|logout|signup|password-reset|password-reset/confirm|verify-email`,
 `auth/invitations/{token-or-code}/` (+ `accept/`), `me/` (+ `password/`, `organizations/`, `permissions/`),
 `org/`, `org/settings/`, `dashboard/summary/`, `permissions/catalog/`, `users/` (+ `counts/`, `{id}/roles|units|permissions|set-password|invitation/`),
-`units/`, `roles/`, `audit-logs/`.
+`units/`, `patrols/`, `roles/`, `audit-logs/`,
+`members/` (+ `counts/`, `export/`, `bulk/`, `import/preview|commit/`, `{id}/units|guardians|medical|certifications|attendance|give-access/`),
+`custom-fields/` (+ `reorder/`), `change-requests/` (+ `counts/`, `{id}/approve|reject/`),
+`attendance/sessions/` (+ `trend/`, `{id}/records/`), `my/family/` (+ `children/`, `children/{id}/`, `requests/`).
 
 Known gap: plain `APIView` endpoints (auth, me, org settings, dashboard) have no request/response annotations yet,
 so drf-spectacular leaves them out of the generated schema.

@@ -5,8 +5,8 @@ from apps.audit.services import log_action
 from apps.core.tenancy import TenantScopedMixin
 from apps.permissions.drf import HasOrgPermission
 
-from .models import Unit, UnitMembership
-from .serializers import UnitSerializer
+from .models import Patrol, Unit, UnitMembership
+from .serializers import PatrolSerializer, UnitSerializer
 
 
 class UnitViewSet(TenantScopedMixin, viewsets.ModelViewSet):
@@ -27,9 +27,7 @@ class UnitViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         return (
             Unit.objects.filter(organization=self.organization)
             .annotate(member_count=Count("memberships", distinct=True))
-            .prefetch_related(
-                Prefetch("memberships", queryset=UnitMembership.objects.select_related("membership__user"))
-            )
+            .prefetch_related(Prefetch("memberships", queryset=UnitMembership.objects.select_related("member")))
             .order_by("age_min", "name_en")
         )
 
@@ -49,4 +47,33 @@ class UnitViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         log_action(self.request, "unit.deleted", organization=self.organization, target=instance)
+        instance.delete()
+
+
+class PatrolViewSet(TenantScopedMixin, viewsets.ModelViewSet):
+    """Patrols / sixes inside units. Visible to members; changes require `units.manage`."""
+
+    serializer_class = PatrolSerializer
+    permission_classes = [permissions.IsAuthenticated, HasOrgPermission]
+    permission_map = {
+        "create": "units.manage",
+        "update": "units.manage",
+        "partial_update": "units.manage",
+        "destroy": "units.manage",
+    }
+    filterset_fields = ["unit"]
+
+    def get_queryset(self):
+        return (
+            Patrol.objects.filter(organization=self.organization)
+            .annotate(member_count=Count("memberships", distinct=True))
+            .order_by("unit__age_min", "unit__name_en", "name")
+        )
+
+    def perform_create(self, serializer):
+        patrol = serializer.save(organization=self.organization)
+        log_action(self.request, "patrol.created", organization=self.organization, target=patrol)
+
+    def perform_destroy(self, instance):
+        log_action(self.request, "patrol.deleted", organization=self.organization, target=instance)
         instance.delete()

@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Unit, UnitMembership
+from .models import Patrol, Unit, UnitMembership
 
 
 @admin.register(Unit)
@@ -10,3 +10,4 @@ class UnitAdmin(admin.ModelAdmin):
 
 
 admin.site.register(UnitMembership)
+admin.site.register(Patrol)

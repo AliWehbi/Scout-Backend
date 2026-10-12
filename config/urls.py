@@ -7,16 +7,23 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.accounts import views as account_views
+from apps.attendance.views import SessionViewSet
 from apps.audit.views import AuditLogViewSet
+from apps.members import views as member_views
 from apps.organizations import views as org_views
 from apps.permissions.views import PermissionCatalogView, RoleViewSet
-from apps.units.views import UnitViewSet
+from apps.units.views import PatrolViewSet, UnitViewSet
 
 router = DefaultRouter()
 router.register("users", org_views.MemberViewSet, basename="member")
 router.register("units", UnitViewSet, basename="unit")
 router.register("roles", RoleViewSet, basename="role")
 router.register("audit-logs", AuditLogViewSet, basename="audit-log")
+router.register("members", member_views.MemberViewSet, basename="person")
+router.register("custom-fields", member_views.CustomFieldViewSet, basename="custom-field")
+router.register("change-requests", member_views.ChangeRequestViewSet, basename="change-request")
+router.register("patrols", PatrolViewSet, basename="patrol")
+router.register("attendance/sessions", SessionViewSet, basename="session")
 
 auth_patterns = [
     path("login/", account_views.LoginView.as_view(), name="login"),
@@ -38,7 +45,15 @@ me_patterns = [
     path("permissions/", org_views.MyPermissionsView.as_view(), name="me-permissions"),
 ]
 
+family_patterns = [
+    path("", member_views.MyFamilyView.as_view(), name="my-family"),
+    path("children/", member_views.MyChildrenView.as_view(), name="my-children"),
+    path("children/<int:pk>/", member_views.MyChildView.as_view(), name="my-child"),
+    path("requests/", member_views.MyRequestsView.as_view(), name="my-requests"),
+]
+
 api_v1 = [
+    path("my/family/", include(family_patterns)),
     path("auth/", include(auth_patterns)),
     path("me/", include(me_patterns)),
     path("org/", org_views.CurrentOrganizationView.as_view(), name="org"),

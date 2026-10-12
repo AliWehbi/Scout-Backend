@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 from django.db.models import Count, Prefetch, Q
 from django.http import Http404
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
@@ -14,6 +17,8 @@ from apps.audit.models import AuditLog
 from apps.audit.serializers import AuditLogSerializer
 from apps.audit.services import log_action
 from apps.core.tenancy import TenantScopedMixin, get_active_membership
+from apps.members.models import Certification, ChangeRequest, Member, MemberKind, MemberStatus, RequestStatus
+from apps.members.services import missing_info_q, scope_members
 from apps.permissions.drf import HasOrgPermission, IsOrgMember, get_permission_service
 from apps.permissions.models import RoleAssignment
 from apps.permissions.serializers import (
@@ -255,7 +260,7 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             .select_related("user")
             .prefetch_related(
                 Prefetch("role_assignments", queryset=RoleAssignment.objects.select_related("role", "unit")),
-                Prefetch("unit_memberships", queryset=UnitMembership.objects.select_related("unit")),
+                Prefetch("member__unit_memberships", queryset=UnitMembership.objects.select_related("unit", "patrol")),
                 "invitations",
             )
         )
@@ -265,11 +270,12 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         if params.get("role"):
             qs = qs.filter(role_assignments__role_id=params["role"])
         if params.get("unit"):
-            qs = qs.filter(unit_memberships__unit_id=params["unit"])
+            qs = qs.filter(member__unit_memberships__unit_id=params["unit"])
         kind = params.get("kind")
         if kind == "leaders":
             qs = qs.filter(
-                Q(unit_memberships__position__in=LEADER_POSITIONS) | Q(role_assignments__role__key__in=LEADER_ROLE_KEYS)
+                Q(member__unit_memberships__position__in=LEADER_POSITIONS)
+                | Q(role_assignments__role__key__in=LEADER_ROLE_KEYS)
             )
         elif kind == "parents":
             qs = qs.filter(role_assignments__role__key="parent")
@@ -347,7 +353,7 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             {
                 "all": base.count(),
                 "leaders": base.filter(
-                    Q(unit_memberships__position__in=LEADER_POSITIONS)
+                    Q(member__unit_memberships__position__in=LEADER_POSITIONS)
                     | Q(role_assignments__role__key__in=LEADER_ROLE_KEYS)
                 )
                 .distinct()
@@ -460,16 +466,31 @@ class DashboardSummaryView(APIView):
         membership = get_active_membership(request)
         org = membership.organization
         service = get_permission_service(request)
-        members = OrgMembership.objects.filter(organization=org)
+        logins = OrgMembership.objects.filter(organization=org)
+        people = Member.objects.filter(organization=org, status=MemberStatus.ACTIVE)
+        visible = (
+            scope_members(people, service.unit_ids("members.view"))
+            if service.has_perm_anywhere("members.view")
+            else people.none()
+        )
 
         units = (
             Unit.objects.filter(organization=org, is_active=True)
             .annotate(member_count=Count("memberships", distinct=True))
-            .prefetch_related(
-                Prefetch("memberships", queryset=UnitMembership.objects.select_related("membership__user"))
-            )
+            .prefetch_related(Prefetch("memberships", queryset=UnitMembership.objects.select_related("member")))
             .order_by("age_min", "name_en")
         )
+        pending_approvals = 0
+        if service.has_perm_anywhere("members.edit"):
+            pending = ChangeRequest.objects.filter(organization=org, status=RequestStatus.PENDING)
+            edit_units = service.unit_ids("members.edit")
+            if edit_units is not None:
+                pending = pending.filter(member__unit_memberships__unit_id__in=edit_units).distinct()
+            pending_approvals = pending.count()
+        soon = timezone.now().date() + timedelta(days=60)
+        expiring = Certification.objects.filter(
+            member__in=visible, expires_on__isnull=False, expires_on__lte=soon
+        ).select_related("member")
         recent = []
         if service.has_perm("audit.view"):
             recent = AuditLogSerializer(
@@ -479,18 +500,31 @@ class DashboardSummaryView(APIView):
         return Response(
             {
                 "counts": {
-                    "members": members.exclude(status=MembershipStatus.DISABLED).count(),
+                    "members": people.count(),
+                    "youth": people.filter(kind=MemberKind.YOUTH).count(),
                     "units": units.count(),
-                    "leaders": members.filter(unit_memberships__position__in=LEADER_POSITIONS).distinct().count(),
-                    "pending_invitations": members.filter(status=MembershipStatus.INVITED).count(),
+                    "leaders": people.filter(unit_memberships__position__in=LEADER_POSITIONS).distinct().count(),
+                    "pending_invitations": logins.filter(status=MembershipStatus.INVITED).count(),
+                    "pending_approvals": pending_approvals,
+                    "missing_info": visible.filter(missing_info_q()).distinct().count(),
                 },
                 "setup": {
                     "organization_created": True,
                     "units_added": units.exists(),
-                    "leaders_invited": members.count() > 1,
+                    "leaders_invited": logins.count() > 1,
                     "branding_set": org.settings.has_custom_colors() or bool(org.logo),
-                    "members_imported": False,  # Members module arrives in phase 2
+                    "members_imported": people.filter(kind=MemberKind.YOUTH).exists(),
                 },
+                "expiring_certifications": [
+                    {
+                        "id": c.pk,
+                        "member_id": c.member_id,
+                        "member_name": c.member.full_name,
+                        "name": c.name,
+                        "expires_on": c.expires_on,
+                    }
+                    for c in expiring.order_by("expires_on")[:8]
+                ],
                 "units": UnitSerializer(units, many=True, context={"organization": org}).data,
                 "recent_activity": recent,
             }

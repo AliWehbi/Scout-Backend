@@ -5,9 +5,10 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
 
+from apps.members import services as member_services
 from apps.permissions.models import PermissionGrant, RoleAssignment
 from apps.permissions.service import create_default_roles
-from apps.units.models import Unit, UnitMembership
+from apps.units.models import Unit
 
 from .models import (
     Invitation,
@@ -43,6 +44,7 @@ def signup_organization(*, organization: dict, admin: dict, units: list[dict], b
 
     membership = OrgMembership.objects.create(organization=org, user=user, is_owner=True)
     RoleAssignment.objects.create(membership=membership, role=roles["org_admin"], assigned_by=user)
+    member_services.ensure_member(membership, kind="adult")
     for unit in units:
         Unit.objects.create(organization=org, **unit)
     return membership
@@ -59,10 +61,9 @@ def replace_role_assignments(membership, assignments: list[dict], actor) -> None
 
 
 def replace_unit_memberships(membership, unit_memberships: list[dict]) -> None:
-    UnitMembership.objects.filter(membership=membership).delete()
-    UnitMembership.objects.bulk_create(
-        [UnitMembership(membership=membership, unit=u["unit"], position=u["position"]) for u in unit_memberships]
-    )
+    """Units belong to the person (Member); a login without one gets a Member first."""
+    member = member_services.ensure_member(membership)
+    member_services.replace_unit_memberships(member, unit_memberships)
 
 
 def replace_permission_grants(membership, grants: list[dict], actor) -> dict:
@@ -127,7 +128,10 @@ def add_member(*, organization, actor, data: dict) -> tuple[OrgMembership, Invit
         status=MembershipStatus.INVITED if invite else MembershipStatus.ACTIVE,
     )
     replace_role_assignments(membership, data.get("roles", []), actor)
-    replace_unit_memberships(membership, data.get("units", []))
+    if data.get("units"):
+        replace_unit_memberships(membership, data["units"])
+    else:
+        member_services.sync_person_records(membership)
     invitation = create_invitation(membership, actor) if invite else None
     return membership, invitation
 

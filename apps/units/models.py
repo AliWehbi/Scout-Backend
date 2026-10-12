@@ -29,6 +29,21 @@ class Unit(TenantModel):
         return self.name_en
 
 
+class Patrol(TenantModel):
+    """A small group inside a unit (patrol, six...)."""
+
+    unit = models.ForeignKey(Unit, on_delete=models.CASCADE, related_name="patrols")
+    name = models.CharField(max_length=80)
+    name_ar = models.CharField(max_length=80, blank=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [models.UniqueConstraint(fields=["unit", "name"], name="patrol_unit_name_unique")]
+
+    def __str__(self):
+        return self.name
+
+
 class UnitPosition(models.TextChoices):
     LEADER = "leader", _("Leader")
     ASSISTANT = "assistant", _("Assistant leader")
@@ -40,16 +55,15 @@ class UnitMembership(models.Model):
     """A person belongs to a unit with a position. One person can be in several units."""
 
     unit = models.ForeignKey(Unit, on_delete=models.CASCADE, related_name="memberships")
-    membership = models.ForeignKey(
-        "organizations.OrgMembership", on_delete=models.CASCADE, related_name="unit_memberships"
-    )
+    member = models.ForeignKey("members.Member", on_delete=models.CASCADE, related_name="unit_memberships")
+    patrol = models.ForeignKey(Patrol, on_delete=models.SET_NULL, null=True, blank=True, related_name="memberships")
     position = models.CharField(max_length=20, choices=UnitPosition.choices, default=UnitPosition.MEMBER)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["unit", "membership"], name="unit_membership_unique")]
+        constraints = [models.UniqueConstraint(fields=["unit", "member"], name="unit_member_unique")]
 
     def __str__(self):
-        return f"{self.membership.user} in {self.unit} ({self.position})"
+        return f"{self.member} in {self.unit} ({self.position})"
