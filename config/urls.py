@@ -9,6 +9,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from apps.accounts import views as account_views
 from apps.attendance.views import AttendanceReportView, SessionViewSet
 from apps.audit.views import AuditLogViewSet
+from apps.core.views import HealthView
 from apps.events import views as event_views
 from apps.inventory import views as inventory_views
 from apps.members import views as member_views
@@ -96,6 +97,7 @@ api_v1 = [
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/", include(api_v1)),
+    path("api/health/", HealthView.as_view(), name="health"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="api-docs"),
 ]

@@ -10,6 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 from django.utils.translation import gettext_lazy as _
 from dotenv import load_dotenv
 
@@ -25,9 +26,16 @@ def env_list(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
 
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-insecure-key-change-me-in-production-0123456789")
+DEV_SECRET_KEY = "dev-insecure-key-change-me-in-production-0123456789"
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", DEV_SECRET_KEY)
 DEBUG = env_bool("DJANGO_DEBUG", True)
-ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
+if not DEBUG and SECRET_KEY == DEV_SECRET_KEY:
+    raise ImproperlyConfigured("Set DJANGO_SECRET_KEY to a long random value when DJANGO_DEBUG is off.")
+# 127.0.0.1/localhost are always allowed for the health checks; in production those ports are bound
+# to the server's localhost only, so they can't be reached from outside.
+ALLOWED_HOSTS = list(
+    dict.fromkeys(env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1") + ["localhost", "127.0.0.1"])
+)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -91,6 +99,7 @@ DATABASES = {
     "default": dj_database_url.config(
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
         conn_max_age=600,
+        conn_health_checks=True,
     )
 }
 
@@ -160,11 +169,35 @@ CORS_ALLOW_HEADERS = [
     "x-organization-id",
 ]
 
-# Email (console backend in development)
+# Email (console backend in development, SMTP in production)
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "Scout Dashboard <no-reply@scoutdashboard.local>")
 
 # Where links in emails point to (the React app)
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 INVITATION_TTL_DAYS = int(os.getenv("INVITATION_TTL_DAYS", "14"))
+
+# Production: the app runs behind the host nginx (TLS) and the stack's nginx container.
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # The host nginx already redirects http to https; turn this on only if it doesn't.
+    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", False)
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# Log to the console so errors show in `docker compose logs`.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "root": {"handlers": ["console"], "level": os.getenv("LOG_LEVEL", "WARNING")},
+    "loggers": {"django": {"handlers": ["console"], "level": os.getenv("LOG_LEVEL", "WARNING"), "propagate": False}},
+}

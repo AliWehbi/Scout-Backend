@@ -18,7 +18,7 @@ python manage.py runserver      # http://127.0.0.1:8000
 Demo sign-ins (password `ScoutDemo!2026`): `rania` (owner/admin), `karim.h` (unit leader with extra grants),
 `maya.s` (parent of Jad and Yara, has a pending change request). `seed_demo --reset` recreates the demo data.
 
-Postgres instead of SQLite: `docker compose up -d db` and set
+Postgres instead of SQLite: `docker compose -f docker-compose.dev.yml up -d` and set
 `DATABASE_URL=postgres://scout:scout@localhost:5432/scout` in `.env`.
 
 API docs: `/api/docs/` (Swagger) · schema: `/api/schema/` · admin: `/admin/` (`python manage.py createsuperuser`).
@@ -26,9 +26,18 @@ API docs: `/api/docs/` (Swagger) · schema: `/api/schema/` · admin: `/admin/` (
 ## Checks
 
 ```bash
-pytest              # 104 tests: auth, tenant isolation, permissions, invitations, settings, members, attendance, events, inventory
+pytest              # 105 tests: auth, tenant isolation, permissions, invitations, settings, members, attendance, events, inventory
 ruff check . && ruff format --check .
 ```
+
+CI runs the same checks with the tests on Postgres before every release.
+
+## Production
+
+Releases are tag-driven: `git tag v1.0.0 && git push origin v1.0.0` tests, builds
+`ghcr.io/aliwehbi/scout-backend:<tag>` and deploys it with Docker Compose (Postgres, gunicorn, nginx).
+Setup, switching over from the old backend, rollback and backups: [DEPLOY.md](DEPLOY.md).
+Health check: `GET /api/health/`.
 
 ## How it fits together
 

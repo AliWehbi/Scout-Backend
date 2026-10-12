@@ -283,7 +283,7 @@ def return_lines(loan: Loan, returns: list[dict], *, returned_by_name: str, retu
     now = timezone.now()
     returned_at = returned_at or now
     for spec in returns:
-        line = LoanLine.objects.select_for_update().select_related("item", "piece").get(pk=spec["line"].pk)
+        line = LoanLine.objects.select_for_update(of=("self",)).select_related("item", "piece").get(pk=spec["line"].pk)
         if line.loan_id != loan.pk:
             raise ValidationError({"returns": [_("Unknown line.")]})
         item = Item.objects.select_for_update().get(pk=line.item_id)
