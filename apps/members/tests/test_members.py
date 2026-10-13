@@ -33,6 +33,46 @@ def test_admin_sees_everyone(org, client_for):
     assert names(res) == ["Jad", "No", "Omar"]
 
 
+def test_list_includes_contact_and_custom_fields(org, client_for):
+    org["jad"].phone, org["jad"].custom_data = "+961 3 123 456", {"uniform_size": "M"}
+    org["jad"].save()
+    rows = client_for(org["admin"].user, org["org"]).get("/api/v1/members/").data["results"]
+    jad = next(r for r in rows if r["first_name"] == "Jad")
+    assert jad["phone"] == "+961 3 123 456" and jad["custom_data"] == {"uniform_size": "M"}
+    assert {"email", "address", "gender", "join_date", "notes"} <= jad.keys()
+
+
+def test_list_sorting(org, client_for):
+    from datetime import date
+
+    CustomField.objects.create(organization=org["org"], key="size", label_en="Size")
+    org["jad"].date_of_birth, org["jad"].custom_data = date(2016, 1, 1), {"size": "M"}
+    org["jad"].save()
+    org["omar"].date_of_birth, org["omar"].phone, org["omar"].custom_data = date(2014, 1, 1), "+961 1", {"size": "L"}
+    org["omar"].save()
+    client = client_for(org["admin"].user, org["org"])
+
+    def order(sort):
+        res = client.get("/api/v1/members/", {"sort": sort})
+        assert res.status_code == 200, res.data
+        return [m["first_name"] for m in res.data["results"]]
+
+    assert order("name") == ["Jad", "No", "Omar"]
+    assert order("-name") == ["Omar", "No", "Jad"]
+    # Missing values go last in both directions
+    assert order("units") == ["Jad", "Omar", "No"]
+    assert order("-units") == ["Omar", "Jad", "No"]
+    assert order("phone")[0] == "Omar" and order("-phone")[0] == "Omar"
+    assert order("age") == ["Jad", "Omar", "No"]
+    assert order("-age") == ["Omar", "Jad", "No"]
+    assert order("custom__size") == ["Omar", "Jad", "No"]
+    assert order("-custom__size") == ["Jad", "Omar", "No"]
+    # Every column sorts without errors; unknown ones are ignored
+    for column in ("name_ar", "kind", "gender", "join_date", "email", "address", "notes", "status", "has_login"):
+        assert len(order(column)) == 3 and len(order(f"-{column}")) == 3
+    assert len(order("nope")) == 3 and len(order("custom__nope")) == 3
+
+
 def test_unit_leader_sees_only_own_unit(org, client_for):
     client = client_for(org["karim"].user, org["org"])
     assert names(client.get("/api/v1/members/")) == ["Jad"]

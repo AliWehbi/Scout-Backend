@@ -162,6 +162,13 @@ class MemberListSerializer(serializers.ModelSerializer):
             "status",
             "age",
             "date_of_birth",
+            "gender",
+            "join_date",
+            "phone",
+            "email",
+            "address",
+            "notes",
+            "custom_data",
             "photo",
             "units",
             "guardians",
@@ -187,13 +194,6 @@ class MemberDetailSerializer(MemberListSerializer):
 
     class Meta(MemberListSerializer.Meta):
         fields = MemberListSerializer.Meta.fields + [
-            "gender",
-            "join_date",
-            "phone",
-            "email",
-            "address",
-            "notes",
-            "custom_data",
             "guardian_links",
             "login",
             "access",

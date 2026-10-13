@@ -4,7 +4,8 @@ from datetime import date
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import Case, F, IntegerField, OuterRef, Prefetch, Subquery, TextField, Value, When
+from django.db.models.functions import Lower, NullIf
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext_lazy as _
@@ -70,6 +71,68 @@ def member_queryset(organization):
             "change_requests__guardian",
         )
     )
+
+
+def _text(field: str):
+    """Case-insensitive text sort key; empty strings count as missing so they sort last."""
+    return NullIf(Lower(field), Value(""), output_field=TextField())
+
+
+# Sort keys for the members list (`?sort=<column>` or `?sort=-<column>`), one or more expressions each.
+MEMBER_SORTS = {
+    "name": lambda: [Lower("first_name"), Lower("last_name")],
+    "name_ar": lambda: [_text("first_name_ar"), _text("last_name_ar")],
+    "kind": lambda: [F("kind")],
+    "gender": lambda: [_text("gender")],
+    "date_of_birth": lambda: [F("date_of_birth")],
+    "join_date": lambda: [F("join_date")],
+    "phone": lambda: [_text("phone")],
+    "email": lambda: [_text("email")],
+    "address": lambda: [_text("address")],
+    "notes": lambda: [_text("notes")],
+    "status": lambda: [F("status")],
+    "has_login": lambda: [Case(When(membership__isnull=False, then=1), default=0, output_field=IntegerField())],
+    "units": lambda: [
+        Subquery(
+            UnitMembership.objects.filter(member=OuterRef("pk"))
+            .annotate(n=Lower("unit__name_en"))
+            .order_by("n")
+            .values("n")[:1]
+        )
+    ],
+    "guardians": lambda: [
+        Subquery(
+            GuardianLink.objects.filter(member=OuterRef("pk"))
+            .annotate(n=Lower("guardian__first_name"))
+            .order_by("-is_primary", "n")
+            .values("n")[:1]
+        )
+    ],
+}
+
+
+def sort_members(qs, param: str, organization):
+    """Order the list by one column. Missing values go last in both directions; id breaks ties."""
+    descending = param.startswith("-")
+    column = param.lstrip("-")
+    if column == "age":  # older = earlier birth date
+        column, descending = "date_of_birth", not descending
+    if column in MEMBER_SORTS:
+        keys = MEMBER_SORTS[column]()
+    elif (
+        column.startswith("custom__")
+        and CustomField.objects.filter(organization=organization, key=column.removeprefix("custom__")).exists()
+    ):
+        keys = [F(f"custom_data__{column.removeprefix('custom__')}")]
+    else:
+        return qs
+    # Annotate so the keys are part of the SELECT (required with DISTINCT on Postgres).
+    qs = qs.annotate(**{f"_sort{i}": key for i, key in enumerate(keys)})
+    order = [
+        F(f"_sort{i}").desc(nulls_last=True) if descending else F(f"_sort{i}").asc(nulls_last=True)
+        for i in range(len(keys))
+    ]
+    return qs.order_by(*order, "-id" if descending else "id")
 
 
 def attendance_summary(member: Member, limit: int = 10) -> dict:
@@ -164,7 +227,10 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             qs = qs.filter(services.missing_info_q())
         if p.get("has_login") in ("true", "false"):
             qs = qs.filter(membership__isnull=p["has_login"] == "false")
-        return qs.distinct()
+        qs = qs.distinct()
+        if p.get("sort"):
+            qs = sort_members(qs, p["sort"], self.organization)
+        return qs
 
     def get_serializer_class(self):
         if self.action == "list":
