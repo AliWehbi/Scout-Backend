@@ -32,7 +32,7 @@ from apps.permissions.service import PermissionService
 from apps.units.models import Unit, UnitMembership, UnitPosition
 from apps.units.serializers import UnitSerializer
 
-from . import services
+from . import dashboard, services
 from .models import Invitation, MembershipStatus, OrgMembership
 from .serializers import (
     AcceptInvitationSerializer,
@@ -466,12 +466,19 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
 
 class DashboardSummaryView(APIView):
+    """
+    Everything the dashboard shows. `range` (today, week, month, year, all, custom with
+    `from` / `to`) applies to attendance and to members joined / left; the rest is current.
+    """
+
     permission_classes = [permissions.IsAuthenticated, IsOrgMember]
 
     def get(self, request):
         membership = get_active_membership(request)
         org = membership.organization
         service = get_permission_service(request)
+        today = timezone.localdate()
+        period = dashboard.resolve_period(request.query_params, today)
         logins = OrgMembership.objects.filter(organization=org)
         people = Member.objects.filter(organization=org, status=MemberStatus.ACTIVE)
         visible = (
@@ -502,6 +509,24 @@ class DashboardSummaryView(APIView):
             recent = AuditLogSerializer(
                 AuditLog.objects.filter(organization=org).select_related("actor")[:6], many=True
             ).data
+        invitations_expiring = Invitation.objects.filter(
+            membership__organization=org,
+            membership__status=MembershipStatus.INVITED,
+            accepted_at__isnull=True,
+            revoked_at__isnull=True,
+            expires_at__gt=timezone.now(),
+            expires_at__lte=timezone.now() + timedelta(days=7),
+        ).count()
+        can_see_members = service.has_perm_anywhere("members.view")
+        attendance = dashboard.attendance_block(service, org, period, today)
+        if period.start is None:  # all time with no attendance to start from
+            period.start = people.order_by("join_date").values_list("join_date", flat=True).first() or today
+        events = dashboard.events_block(service, org, today) if service.has_perm_anywhere("events.view") else None
+        equipment = (
+            dashboard.equipment_block(org, today)
+            if service.has_perm("inventory.view") or service.has_perm("inventory.check_out")
+            else None
+        )
 
         return Response(
             {
@@ -513,7 +538,14 @@ class DashboardSummaryView(APIView):
                     "pending_invitations": logins.filter(status=MembershipStatus.INVITED).count(),
                     "pending_approvals": pending_approvals,
                     "missing_info": visible.filter(missing_info_q()).distinct().count(),
+                    "invitations_expiring": invitations_expiring,
+                    "move_up": dashboard.move_up(visible, today) if can_see_members else 0,
                 },
+                "period": period.as_dict(),
+                "attendance": attendance,
+                "membership": dashboard.membership_block(org, visible, period, today),
+                "events": events,
+                "equipment": equipment,
                 "setup": {
                     "organization_created": True,
                     "units_added": units.exists(),

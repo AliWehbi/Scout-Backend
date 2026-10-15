@@ -3,7 +3,7 @@ from datetime import date
 from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Case, F, IntegerField, OuterRef, Prefetch, Subquery, TextField, Value, When
+from django.db.models import Case, F, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Lower, NullIf
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -347,7 +347,9 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             return Response(GuardianLinkSerializer(member.guardian_links.select_related("guardian"), many=True).data)
         self.require("members.edit", member)
         serializer = GuardianLinkWriteSerializer(
-            data=request.data.get("guardians", []), many=True, context=self.get_serializer_context()
+            data=request.data.get("guardians", []),
+            many=True,
+            context={**self.get_serializer_context(), "member": member},
         )
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
@@ -355,6 +357,8 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             seen = set()
             for row in serializer.validated_data:
                 guardian = row.get("guardian")
+                if guardian is None and row.get("membership"):
+                    guardian = services.ensure_guardian(row["membership"])
                 if guardian is None:
                     guardian = Guardian.objects.create(
                         organization=self.organization,
@@ -511,7 +515,9 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         else:
             if not data.get("status"):
                 raise ValidationError({"status": [_("This field is required.")]})
-            Member.objects.filter(pk__in=[m.pk for m in members]).update(status=data["status"])
+            for member in members:
+                member.status = data["status"]
+                member.save()  # one by one, so each keeps its left date in step
         log_action(
             request,
             "person.bulk_updated",
@@ -858,3 +864,44 @@ class MyFamilyView(APIView):
                 **events,
             }
         )
+
+
+class GuardianOptionsView(APIView):
+    """Logins holding the Parent role, which can be linked as a member's guardian."""
+
+    permission_classes = [permissions.IsAuthenticated, IsOrgMember]
+
+    def get(self, request):
+        if not get_permission_service(request).has_perm_anywhere("members.edit"):
+            raise PermissionDenied
+        org = get_active_membership(request).organization
+        q = request.query_params.get("search", "").strip()
+        parents = (
+            OrgMembership.objects.filter(organization=org, role_assignments__role__key="parent")
+            .exclude(status=MembershipStatus.DISABLED)
+            .select_related("user", "guardian")
+            .distinct()
+        )
+        if q:
+            parents = parents.filter(
+                Q(user__first_name__icontains=q)
+                | Q(user__last_name__icontains=q)
+                | Q(user__username__icontains=q)
+                | Q(user__email__icontains=q)
+            )
+        options = []
+        for m in parents.order_by("user__first_name", "user__last_name")[:30]:
+            guardian = getattr(m, "guardian", None)
+            options.append(
+                {
+                    "guardian_id": guardian.pk if guardian else None,
+                    "membership_id": m.pk,
+                    "full_name": guardian.full_name if guardian else m.user.full_name,
+                    "first_name": guardian.first_name if guardian else m.user.first_name or m.user.username,
+                    "last_name": guardian.last_name if guardian else m.user.last_name,
+                    "email": (guardian.email if guardian else "") or m.user.email or "",
+                    "phone": guardian.phone if guardian else "",
+                    "has_login": True,
+                }
+            )
+        return Response(options)

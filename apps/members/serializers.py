@@ -4,6 +4,7 @@ from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
+from apps.organizations.models import OrgMembership
 from apps.units.serializers import UnitMembershipSerializer, UnitMembershipWriteSerializer
 
 from . import services
@@ -110,10 +111,18 @@ class GuardianLinkSerializer(serializers.ModelSerializer):
         fields = ["id", "guardian", "relationship", "is_primary"]
 
 
+def _is_parent(membership) -> bool:
+    return membership.role_assignments.filter(role__key="parent").exists()
+
+
 class GuardianLinkWriteSerializer(serializers.Serializer):
-    """Link an existing guardian (`guardian_id`) or create one from the given details."""
+    """
+    Link an existing guardian (`guardian_id`), a user's login (`membership_id`, which
+    gets a guardian record if it has none yet) or create a contact from the given details.
+    """
 
     guardian_id = serializers.IntegerField(required=False, allow_null=True)
+    membership_id = serializers.IntegerField(required=False, allow_null=True)
     first_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
     last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
     phone = serializers.CharField(max_length=40, required=False, allow_blank=True)
@@ -126,11 +135,25 @@ class GuardianLinkWriteSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         org = self.context["organization"]
+        member = self.context.get("member")
         if attrs.get("guardian_id"):
             guardian = Guardian.objects.filter(organization=org, pk=attrs["guardian_id"]).first()
             if guardian is None:
                 raise serializers.ValidationError({"guardian_id": _("Unknown guardian.")})
+            # A login can only be newly linked while it holds the Parent role; existing links stay editable.
+            already_linked = member is not None and guardian.links.filter(member=member).exists()
+            if guardian.membership_id and not already_linked and not _is_parent(guardian.membership):
+                raise serializers.ValidationError({"guardian_id": _("Only users with the Parent role can be linked.")})
             attrs["guardian"] = guardian
+        elif attrs.get("membership_id"):
+            membership = OrgMembership.objects.filter(organization=org, pk=attrs["membership_id"]).first()
+            if membership is None:
+                raise serializers.ValidationError({"membership_id": _("Unknown user.")})
+            if not _is_parent(membership):
+                raise serializers.ValidationError(
+                    {"membership_id": _("Only users with the Parent role can be linked.")}
+                )
+            attrs["membership"] = membership
         elif not (attrs.get("first_name") or "").strip():
             raise serializers.ValidationError({"first_name": _("This field is required.")})
         return attrs
@@ -164,6 +187,7 @@ class MemberListSerializer(serializers.ModelSerializer):
             "date_of_birth",
             "gender",
             "join_date",
+            "left_date",
             "phone",
             "email",
             "address",
@@ -243,6 +267,7 @@ class MemberWriteSerializer(serializers.ModelSerializer):
             "kind",
             "status",
             "join_date",
+            "left_date",
             "phone",
             "email",
             "address",

@@ -23,6 +23,18 @@ class Gender(models.TextChoices):
     FEMALE = "female", _("Female")
 
 
+def apply_status_dates(member, previous_status: str | None) -> None:
+    """
+    Keep `left_date` in step with the status: set when an active member becomes inactive or
+    alumni (a date given explicitly is kept), cleared when they are active again.
+    Inactive -> alumni keeps the original date; a member created as inactive gets none.
+    """
+    if member.status == MemberStatus.ACTIVE:
+        member.left_date = None
+    elif member.left_date is None and previous_status == MemberStatus.ACTIVE:
+        member.left_date = date.today()
+
+
 class Member(TenantModel):
     """
     A person in the organization. A login is optional: most young members have none,
@@ -43,6 +55,8 @@ class Member(TenantModel):
     kind = models.CharField(max_length=10, choices=MemberKind.choices, default=MemberKind.YOUTH)
     status = models.CharField(max_length=10, choices=MemberStatus.choices, default=MemberStatus.ACTIVE)
     join_date = models.DateField(null=True, blank=True)
+    # Set when the member stops being active (inactive or alumni), cleared if they come back.
+    left_date = models.DateField(null=True, blank=True)
     phone = models.CharField(max_length=40, blank=True)
     email = models.EmailField(blank=True)
     address = models.CharField(max_length=255, blank=True)
@@ -52,6 +66,23 @@ class Member(TenantModel):
     class Meta:
         ordering = ["first_name", "last_name"]
         indexes = [models.Index(fields=["organization", "status"])]
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._loaded_status = instance.__dict__.get("status")
+        return instance
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and self.join_date is None:
+            self.join_date = date.today()
+        previous = None if self._state.adding else getattr(self, "_loaded_status", self.status)
+        apply_status_dates(self, previous)
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "status" in update_fields:
+            kwargs["update_fields"] = {*update_fields, "left_date"}
+        super().save(*args, **kwargs)
+        self._loaded_status = self.status
 
     @property
     def full_name(self) -> str:

@@ -218,6 +218,51 @@ def test_guardians_replace(org, client_for):
     assert Guardian.objects.count() == 1
 
 
+def test_guardian_options_lists_only_parents(org, world, client_for):
+    Guardian.objects.create(organization=org["org"], first_name="Maya", last_name="Contact")
+    world.member(org["org"], world.user("nadim", first_name="Nadim"), roles=[("unit_leader", None)])
+    parent = world.member(org["org"], world.user("maya", first_name="Maya"), roles=[("parent", None)])
+    client = client_for(org["admin"].user, org["org"])
+
+    res = client.get("/api/v1/guardians/options/", {"search": "maya"})
+    assert res.status_code == 200
+    assert [(o["membership_id"], o["has_login"]) for o in res.data] == [(parent.pk, True)]
+    assert client.get("/api/v1/guardians/options/", {"search": "nadim"}).data == []
+
+
+def test_linking_a_login_without_parent_role_is_rejected(org, world, client_for):
+    leader = world.member(org["org"], world.user("nadim", first_name="Nadim"), roles=[("unit_leader", None)])
+    res = client_for(org["admin"].user, org["org"]).put(
+        f"/api/v1/members/{org['jad'].pk}/guardians/",
+        {"guardians": [{"membership_id": leader.pk, "relationship": "father"}]},
+        format="json",
+    )
+    assert res.status_code == 400
+    assert not GuardianLink.objects.filter(member=org["jad"]).exists()
+
+
+def test_guardian_options_requires_members_edit(org, world, client_for):
+    parent = world.member(org["org"], world.user("maya"), roles=[("parent", None)])
+    res = client_for(parent.user, org["org"]).get("/api/v1/guardians/options/")
+    assert res.status_code == 403
+
+
+def test_link_parent_login_as_guardian_shows_child_in_family(org, world, client_for):
+    parent = world.member(org["org"], world.user("maya", first_name="Maya"), roles=[("parent", None)])
+    client = client_for(org["admin"].user, org["org"])
+    res = client.put(
+        f"/api/v1/members/{org['jad'].pk}/guardians/",
+        {"guardians": [{"membership_id": parent.pk, "relationship": "mother", "is_primary": True}]},
+        format="json",
+    )
+    assert res.status_code == 200, res.data
+    link = res.data["guardian_links"][0]
+    assert link["guardian"]["has_login"] and link["guardian"]["full_name"] == "Maya"
+
+    children = client_for(parent.user, org["org"]).get("/api/v1/my/family/children/")
+    assert [c["id"] for c in children.data] == [org["jad"].pk]
+
+
 @pytest.fixture
 def family(org, world):
     parent_login = world.member(org["org"], world.user("maya", email="maya@x.org"), roles=[("parent", None)])
