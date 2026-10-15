@@ -9,7 +9,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from apps.accounts import views as account_views
 from apps.attendance.views import AttendanceReportView, SessionViewSet
 from apps.audit.views import AuditLogViewSet
-from apps.core.views import HealthView
+from apps.core.views import HealthView, SiteConfigView
 from apps.documents.views import DocumentTemplateViewSet
 from apps.events import views as event_views
 from apps.inventory import views as inventory_views
@@ -72,6 +72,7 @@ my_event_patterns = [
 ]
 
 api_v1 = [
+    path("site/", SiteConfigView.as_view(), name="site-config"),
     path("my/family/", include(family_patterns)),
     path("my/events/", include(my_event_patterns)),
     path("my/calendar/", event_views.MyCalendarView.as_view(), name="my-calendar"),

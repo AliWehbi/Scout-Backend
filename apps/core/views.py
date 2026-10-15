@@ -3,6 +3,8 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .models import SiteSettings
+
 
 class HealthView(APIView):
     """Liveness check for Docker and the deploy job: the app is up and the database answers."""
@@ -17,3 +19,13 @@ class HealthView(APIView):
         except Exception:
             return Response({"status": "database unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response({"status": "ok"})
+
+
+class SiteConfigView(APIView):
+    """Public, platform-wide flags the sign-in pages need before anyone is logged in."""
+
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response({"signup_enabled": SiteSettings.load().allow_public_signup})

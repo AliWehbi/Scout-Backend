@@ -6,7 +6,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,6 +16,7 @@ from apps.accounts.views import AuthThrottle
 from apps.audit.models import AuditLog
 from apps.audit.serializers import AuditLogSerializer
 from apps.audit.services import log_action
+from apps.core.models import SiteSettings
 from apps.core.tenancy import TenantScopedMixin, get_active_membership
 from apps.members.models import Certification, ChangeRequest, Member, MemberKind, MemberStatus, RequestStatus
 from apps.members.services import missing_info_q, scope_members
@@ -62,6 +63,11 @@ class SignupView(APIView):
     throttle_classes = [AuthThrottle]
 
     def post(self, request):
+        if not SiteSettings.load().allow_public_signup:
+            raise PermissionDenied(
+                _("Sign-up is closed. Contact the platform administrator to add your organization."),
+                code="signup_disabled",
+            )
         serializer = SignupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
