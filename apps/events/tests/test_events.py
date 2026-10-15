@@ -307,3 +307,63 @@ def test_organization_with_events_can_be_deleted(setup, client_for):
     create_event(admin, setup)
     setup["org"].delete()
     assert not Event.objects.exists() and not EventType.objects.exists()
+
+
+def test_org_wide_event_counts_per_unit(setup, client_for):
+    admin = client_for(setup["admin"].user, setup["org"])
+    event = create_event(admin, setup, start_date="2026-02-07", end_date="2026-02-07", end_time="18:00", units=[])
+    admin.post(
+        f"/api/v1/events/{event['id']}/invite/", {"units": [setup["cubs"].pk, setup["scouts"].pk]}, format="json"
+    )
+    res = admin.put(
+        f"/api/v1/events/{event['id']}/attendance/",
+        {
+            "date": "2026-02-07",
+            "records": [
+                {"member": setup["jad"].pk, "status": "present"},
+                {"member": setup["omar"].pk, "status": "absent"},
+            ],
+        },
+        format="json",
+    )
+    assert res.status_code == 200, res.data
+    # A leader of one unit sees the event, counted over their unit's members only.
+    karim = client_for(setup["karim"].user, setup["org"])
+    report = karim.get(f"/api/v1/attendance/report/?units={setup['cubs'].pk}").data
+    assert report["summary"]["events"] == 1 and report["occasions"][0]["rate"] == 100
+    members = {m["full_name"]: m for m in report["members"]}
+    assert members["Jad"]["present"] == 1 and "Omar" not in members
+    assert karim.get(f"/api/v1/attendance/sessions/trend/?unit={setup['cubs'].pk}").data["points"][0]["rate"] == 100
+    assert karim.get(f"/api/v1/attendance/report/?units={setup['cubs'].pk},{setup['scouts'].pk}").status_code == 403
+    # Several units at once.
+    both = admin.get(f"/api/v1/attendance/report/?units={setup['cubs'].pk},{setup['scouts'].pk}").data
+    assert both["occasions"][0]["rate"] == 50
+    assert {m["full_name"] for m in both["members"]} >= {"Jad", "Omar"}
+
+
+def test_excused_counted_as_absent(setup, client_for):
+    karim = client_for(setup["karim"].user, setup["org"])
+    cubs = setup["cubs"].pk
+    for day, status in (("2026-03-07", "present"), ("2026-03-14", "excused")):
+        sid = karim.post(
+            "/api/v1/attendance/sessions/", {"unit": cubs, "title": "Meeting", "date": day}, format="json"
+        ).data["id"]
+        karim.put(
+            f"/api/v1/attendance/sessions/{sid}/records/",
+            {"records": [{"member": setup["jad"].pk, "status": status, "note": "Sick"}]},
+            format="json",
+        )
+    lenient = karim.get(f"/api/v1/attendance/report/?units={cubs}").data
+    strict = karim.get(f"/api/v1/attendance/report/?units={cubs}&excused=absent").data
+    assert lenient["summary"]["average"] == 100 and strict["summary"]["average"] == 50
+    assert {m["full_name"]: m for m in strict["members"]}["Jad"]["rate"] == 50
+    assert [
+        p["rate"] for p in karim.get(f"/api/v1/attendance/sessions/trend/?units={cubs}&excused=absent").data["points"]
+    ] == [100, 0]
+    admin = client_for(setup["admin"].user, setup["org"])
+    jad = setup["jad"].pk
+    summary = admin.get(f"/api/v1/members/{jad}/attendance/").data
+    assert summary["rate"] == 100 and summary["rate_strict"] == 50
+    # Parents see both numbers too.
+    child = client_for(setup["maya"].user, setup["org"]).get("/api/v1/my/family/children/").data[0]
+    assert child["attendance"]["rate"] == 100 and child["attendance"]["rate_strict"] == 50

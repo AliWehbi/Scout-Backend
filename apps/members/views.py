@@ -141,9 +141,11 @@ def attendance_summary(member: Member, limit: int = 10) -> dict:
         .order_by("-session__date", "-session__id")[:limit]
     )
     counted = [r for r in records if r.status != "excused"]
-    rate = round(100 * sum(r.status == "present" for r in counted) / len(counted)) if counted else None
+    present = sum(r.status == "present" for r in records)
     return {
-        "rate": rate,
+        "rate": round(100 * present / len(counted)) if counted else None,
+        # Excused absences counted as missed: how much was missed, whatever the reason.
+        "rate_strict": round(100 * present / len(records)) if records else None,
         "recent": [
             {
                 "session_id": r.session_id,
