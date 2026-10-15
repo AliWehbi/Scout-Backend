@@ -140,6 +140,9 @@ jobs:
             export IMAGE_TAG=${{ env.TAG }}
             docker compose pull backend
             docker compose up -d
+            # nginx is not recreated when only the backend changes; restart it so it
+            # picks up this release's nginx.conf (copied above).
+            docker compose restart nginx
             echo "${{ env.TAG }}" > .release
 
             # Wait for the new version to answer through the stack's nginx.
