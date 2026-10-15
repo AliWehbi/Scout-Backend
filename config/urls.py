@@ -10,6 +10,7 @@ from apps.accounts import views as account_views
 from apps.attendance.views import AttendanceReportView, SessionViewSet
 from apps.audit.views import AuditLogViewSet
 from apps.core.views import HealthView
+from apps.documents.views import DocumentTemplateViewSet
 from apps.events import views as event_views
 from apps.inventory import views as inventory_views
 from apps.members import views as member_views
@@ -29,6 +30,7 @@ router.register("patrols", PatrolViewSet, basename="patrol")
 router.register("attendance/sessions", SessionViewSet, basename="session")
 router.register("event-types", event_views.EventTypeViewSet, basename="event-type")
 router.register("events", event_views.EventViewSet, basename="event")
+router.register("document-templates", DocumentTemplateViewSet, basename="document-template")
 router.register("inventory/categories", inventory_views.CategoryViewSet, basename="inventory-category")
 router.register("inventory/locations", inventory_views.LocationViewSet, basename="inventory-location")
 router.register("inventory/external-borrowers", inventory_views.ExternalBorrowerViewSet, basename="inventory-external")

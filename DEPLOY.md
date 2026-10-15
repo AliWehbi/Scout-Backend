@@ -132,4 +132,5 @@ docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | g
 gunzip -c scout-YYYY-MM-DD.sql.gz | docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB"'
 ```
 
-Uploaded files (logos, photos) live in the `scout_media_volume` Docker volume.
+Uploaded files (logos, photos) live in the `scout_media_volume` Docker volume. Uploaded Word templates live
+in `scout_private_volume`, which only the backend mounts (nginx must never serve it); back up both.

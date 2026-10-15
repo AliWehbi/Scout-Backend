@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 from apps.attendance.models import AttendanceRecord, AttendanceStatus
 from apps.audit.services import log_action
 from apps.core.tenancy import TenantScopedMixin, get_active_membership
+from apps.documents.views import DocumentThrottle, export_response
 from apps.permissions.drf import HasOrgPermission, IsOrgMember, get_permission_service
 from apps.units.models import Patrol, UnitMembership
 
@@ -217,6 +218,11 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             event.save(update_fields=["status", "updated_at"])
             log_action(request, "event.cancelled", organization=self.organization, target=event)
         return Response(self.detail_data(event))
+
+    @action(detail=True, methods=["get"], throttle_classes=[DocumentThrottle])
+    def export(self, request, pk=None):
+        """The event as a Word document, filled into the organization's template."""
+        return export_response(request, event=self.get_object(), service=self.service, organization=self.organization)
 
     # ------------------------------------------------------------ invitations
 

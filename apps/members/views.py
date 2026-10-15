@@ -1,4 +1,3 @@
-import csv
 from datetime import date
 
 from django.contrib.auth import get_user_model, password_validation
@@ -27,7 +26,7 @@ from apps.permissions.drf import HasOrgPermission, IsOrgMember, get_permission_s
 from apps.units.models import Unit, UnitMembership
 from apps.units.serializers import UnitMembershipSerializer, UnitMembershipWriteSerializer
 
-from . import services
+from . import exporter, services
 from .importer import Importer, parse_json_field
 from .models import (
     ChangeRequest,
@@ -550,62 +549,46 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         log_action(request, "person.imported", organization=self.organization, changes=result)
         return Response(result)
 
-    @action(detail=False, methods=["get"])
-    def export(self, request):
+    def _export_base(self):
         if not self.service.has_perm_anywhere("members.view"):
             raise PermissionDenied()
-        fields = list(CustomField.objects.filter(organization=self.organization, is_active=True))
-        response = HttpResponse(content_type="text/csv; charset=utf-8")
-        response["Content-Disposition"] = 'attachment; filename="members.csv"'
-        response.write("﻿")  # BOM so Excel opens Arabic correctly
-        writer = csv.writer(response)
-        writer.writerow(
-            [
-                "First name",
-                "Last name",
-                "First name (Arabic)",
-                "Last name (Arabic)",
-                "Date of birth",
-                "Gender",
-                "Type",
-                "Status",
-                "Units",
-                "Phone",
-                "Email",
-                "Address",
-                "Guardians",
-            ]
-            + [f.label_en for f in fields]
+        # Everyone this login may see; the export picks its own units, statuses and groups.
+        return services.scope_members(member_queryset(self.organization), self.service.unit_ids("members.view"))
+
+    @action(detail=False, methods=["get"], url_path="export/fields")
+    def export_fields(self, request):
+        self._export_base()
+        return Response(exporter.catalog_payload(self.organization, self.service))
+
+    @action(detail=False, methods=["get"])
+    def export(self, request):
+        """Excel file of the chosen people and columns (`?fields=a,b&units=1,2&groups=leaders,members`)."""
+        base = self._export_base()
+        lang = request.query_params.get("lang") or request.LANGUAGE_CODE
+        req = exporter.parse_request(
+            request.query_params, self.organization, self.service, "ar" if lang == "ar" else "en"
         )
-        for m in self.filter_queryset(self.get_queryset()):
-            writer.writerow(
-                [
-                    m.first_name,
-                    m.last_name,
-                    m.first_name_ar,
-                    m.last_name_ar,
-                    m.date_of_birth or "",
-                    m.gender,
-                    m.kind,
-                    m.status,
-                    "; ".join(f"{u.unit.name_en} ({u.position})" for u in m.unit_memberships.all()),
-                    m.phone,
-                    m.email,
-                    m.address,
-                    "; ".join(f"{ln.guardian.full_name} {ln.guardian.phone}".strip() for ln in m.guardian_links.all()),
-                ]
-                + [_csv_value((m.custom_data or {}).get(f.key)) for f in fields]
-            )
-        log_action(request, "person.exported", organization=self.organization)
+        rows = exporter.build_rows(base, req, self.service)
+        response = HttpResponse(
+            exporter.write_workbook(rows, req, self.organization, self.service),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = 'attachment; filename="members.xlsx"'
+        response["Cache-Control"] = "no-store"
+        medical = [f for f in req.fields if exporter.catalog(self.organization, self.service)[f][2] == "medical"]
+        log_action(
+            request,
+            "person.exported",
+            organization=self.organization,
+            changes={
+                "rows": len(rows),
+                "fields": req.fields,
+                "units": req.unit_ids,
+                "groups": req.groups,
+                "medical_fields": medical,
+            },
+        )
         return response
-
-
-def _csv_value(value):
-    if isinstance(value, list):
-        return "; ".join(map(str, value))
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    return "" if value is None else value
 
 
 class CustomFieldViewSet(TenantScopedMixin, viewsets.ModelViewSet):

@@ -34,6 +34,8 @@ services:
     volumes:
       - static_volume:/app/staticfiles
       - media_volume:/app/media
+      # Uploaded document templates: backend only, never mounted into nginx.
+      - private_volume:/app/private
     depends_on:
       db:
         condition: service_healthy
@@ -62,3 +64,4 @@ volumes:
   pgdata:
   static_volume:
   media_volume:
+  private_volume:

@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     "apps.attendance",
     "apps.events",
     "apps.inventory",
+    "apps.documents",
 ]
 
 MIDDLEWARE = [
@@ -125,6 +126,8 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
+# Files only the API may hand out (uploaded document templates). Never served by nginx.
+PRIVATE_MEDIA_ROOT = Path(os.getenv("PRIVATE_MEDIA_ROOT", BASE_DIR / "private"))
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

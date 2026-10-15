@@ -18,7 +18,7 @@ RUN pip install -r requirements.txt
 COPY . .
 
 RUN chmod +x /app/entrypoint.sh \
-    && mkdir -p /app/staticfiles /app/media \
+    && mkdir -p /app/staticfiles /app/media /app/private \
     && chown -R appuser:appuser /app
 
 USER appuser

@@ -223,5 +223,6 @@ __marimo__/
 .venv/
 db.sqlite3
 media/
+private/
 staticfiles/
 .env

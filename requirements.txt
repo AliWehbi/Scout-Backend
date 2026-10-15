@@ -11,3 +11,4 @@ psycopg-binary==3.3.6
 python-dotenv==1.2.4
 openpyxl==3.1.5
 gunicorn==24.1.1
+docxtpl==0.20.2

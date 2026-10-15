@@ -482,8 +482,6 @@ def test_bulk_and_export(org, client_for):
         ).status_code
         == 403
     )
-    csv_text = client.get("/api/v1/members/export/").content.decode("utf-8-sig")
-    assert csv_text.splitlines()[0].startswith("First name,Last name") and "Jad" in csv_text
 
 
 def test_certifications_and_dashboard(org, client_for):
