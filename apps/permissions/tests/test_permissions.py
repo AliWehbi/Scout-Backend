@@ -63,7 +63,7 @@ def test_expired_grant_is_ignored(setup):
 
 def test_owner_has_everything(setup):
     s = PermissionService(setup["admin"])
-    assert s.has_perm("permissions.manage") and s.has_perm("finance.manage_expenses", setup["rovers"])
+    assert s.has_perm("permissions.manage") and s.has_perm("finance.manage", setup["rovers"])
 
 
 def test_disabled_membership_has_nothing(setup):

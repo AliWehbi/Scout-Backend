@@ -12,6 +12,7 @@ from apps.audit.views import AuditLogViewSet
 from apps.core.views import HealthView, SiteConfigView
 from apps.documents.views import DocumentTemplateViewSet
 from apps.events import views as event_views
+from apps.finance import views as finance_views
 from apps.inventory import views as inventory_views
 from apps.members import views as member_views
 from apps.organizations import views as org_views
@@ -37,6 +38,9 @@ router.register("inventory/external-borrowers", inventory_views.ExternalBorrower
 router.register("inventory/items", inventory_views.ItemViewSet, basename="inventory-item")
 router.register("inventory/loans", inventory_views.LoanViewSet, basename="inventory-loan")
 router.register("inventory/stocktakes", inventory_views.StockTakeViewSet, basename="inventory-stocktake")
+router.register("finance/currencies", finance_views.CurrencyViewSet, basename="finance-currency")
+router.register("finance/categories", finance_views.CategoryViewSet, basename="finance-category")
+router.register("finance/entries", finance_views.EntryViewSet, basename="finance-entry")
 
 auth_patterns = [
     path("login/", account_views.LoginView.as_view(), name="login"),
@@ -81,6 +85,8 @@ api_v1 = [
     path("calendar/<str:token>.ics", event_views.CalendarFeedView.as_view(), name="calendar-feed"),
     path("attendance/report/", AttendanceReportView.as_view(), name="attendance-report"),
     path("inventory/summary/", inventory_views.SummaryView.as_view(), name="inventory-summary"),
+    path("finance/summary/", finance_views.SummaryView.as_view(), name="finance-summary"),
+    path("finance/events/", finance_views.EventOptionsView.as_view(), name="finance-events"),
     path("inventory/lookup/", inventory_views.LookupView.as_view(), name="inventory-lookup"),
     path("inventory/borrowers/", inventory_views.BorrowerOptionsView.as_view(), name="inventory-borrowers"),
     path("events/<int:event_id>/gear/", inventory_views.EventGearView.as_view(), name="event-gear"),

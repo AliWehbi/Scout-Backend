@@ -49,9 +49,8 @@ CATALOG: tuple[PermissionGroup, ...] = (
         "finance",
         _("Finance"),
         (
-            PermissionDef("finance.view", _("View finance"), True),
-            PermissionDef("finance.manage_payments", _("Record payments"), True),
-            PermissionDef("finance.manage_expenses", _("Manage expenses"), True),
+            PermissionDef("finance.view", _("View finances"), False),
+            PermissionDef("finance.manage", _("Manage finances"), False),
         ),
     ),
     PermissionGroup(
@@ -79,9 +78,11 @@ CATALOG: tuple[PermissionGroup, ...] = (
 
 ALL_PERMISSIONS: dict[str, PermissionDef] = {p.codename: p for g in CATALOG for p in g.permissions}
 
-# The equipment store is shared by the whole organization, so these apply organization-wide
-# even when they come from a role assigned for one unit (e.g. a Cubs unit leader).
-SHARED_STORE_PERMISSIONS = frozenset({"inventory.view", "inventory.check_out", "inventory.manage"})
+# The equipment store and the books are shared by the whole organization, so these apply
+# organization-wide even when they come from a role assigned for one unit (e.g. a Cubs unit leader).
+ORG_WIDE_PERMISSIONS = frozenset(
+    {"inventory.view", "inventory.check_out", "inventory.manage", "finance.view", "finance.manage"}
+)
 PERMISSION_GROUP: dict[str, str] = {p.codename: g.key for g in CATALOG for p in g.permissions}
 
 
@@ -117,8 +118,8 @@ DEFAULT_ROLES: tuple[dict, ...] = (
     {
         "key": "treasurer",
         "name": _("Treasurer"),
-        "description": _("Manages fees, payments and expenses."),
-        "permissions": ("finance.view", "finance.manage_payments", "finance.manage_expenses"),
+        "description": _("Keeps the books: income, expenses and currencies."),
+        "permissions": ("finance.view", "finance.manage"),
     },
     {
         "key": "quartermaster",

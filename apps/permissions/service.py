@@ -12,7 +12,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from .catalog import ALL_PERMISSIONS, DEFAULT_ROLES, PERMISSION_GROUP, SHARED_STORE_PERMISSIONS
+from .catalog import ALL_PERMISSIONS, DEFAULT_ROLES, ORG_WIDE_PERMISSIONS, PERMISSION_GROUP
 from .models import Permission, PermissionGrant, Role, RoleAssignment
 
 ORG_WIDE = None
@@ -38,7 +38,7 @@ class PermissionService:
         assignments = RoleAssignment.objects.filter(membership=membership).prefetch_related("role__permissions")
         for assignment in assignments:
             for perm in assignment.role.permissions.all():
-                if assignment.unit_id is None or perm.codename in SHARED_STORE_PERMISSIONS:
+                if assignment.unit_id is None or perm.codename in ORG_WIDE_PERMISSIONS:
                     result[perm.codename].add(ORG_WIDE)
                 elif perm.unit_scoped:
                     result[perm.codename].add(assignment.unit_id)
@@ -50,7 +50,7 @@ class PermissionService:
         )
         for grant in grants:
             codename = grant.permission.codename
-            result[codename].add(ORG_WIDE if codename in SHARED_STORE_PERMISSIONS else grant.unit_id)
+            result[codename].add(ORG_WIDE if codename in ORG_WIDE_PERMISSIONS else grant.unit_id)
         return result
 
     def has_perm(self, codename: str, unit=None) -> bool:

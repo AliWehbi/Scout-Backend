@@ -7,8 +7,11 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.attendance.models import AttendanceRecord, Session
 from apps.events import services as event_services
-from apps.events.models import EventStatus, EventType, RespondedAs, Response
+from apps.events.models import Event, EventStatus, EventType, RespondedAs, Response
 from apps.events.services import create_default_event_types
+from apps.finance.models import Category as FinanceCategory
+from apps.finance.models import Currency, Entry
+from apps.finance.services import create_default_finance
 from apps.members.models import (
     Certification,
     ChangeRequest,
@@ -316,7 +319,6 @@ class Command(BaseCommand):
         )
 
     def seed_inventory(self, org, units, youth, leaders, rania):
-        from apps.events.models import Event
         from apps.inventory import services as inv
         from apps.inventory.models import Category, Condition, ExternalBorrower, Item, ItemLog, Location
 
@@ -440,6 +442,39 @@ class Command(BaseCommand):
             inv.reserve(camp, tins, quantity=20, actor=rania)
             inv.reserve(camp, kit, pieces=[list(kit.pieces.all())[1]], actor=rania)
             inv.reserve(camp, gas, quantity=4, actor=rania)
+
+    def seed_finance(self, org, rania, karim, joseph):
+        create_default_finance(org)
+        usd = Currency.objects.get(organization=org, is_default=True)
+        lbp = Currency.objects.create(
+            organization=org, code="LBP", name_en="Lebanese pound", name_ar="ليرة لبنانية", symbol_en="LBP",
+            symbol_ar="ل.ل.", decimals=0, rate=89500, order=1, rate_updated_at=timezone.now(), rate_updated_by=rania,
+        )  # fmt: skip
+        cats = {c.name_en: c for c in FinanceCategory.objects.filter(organization=org)}
+        camp = Event.objects.filter(organization=org, title__startswith="Autumn camp").first()
+        football = Event.objects.filter(organization=org, title__startswith="Football").first()
+        today = timezone.localdate()
+        rows = [
+            # days ago, kind, category, description, amount, currency, event, who
+            (40, "income", "Membership dues", "Monthly dues — September", 1980, usd, None, joseph),
+            (33, "expense", "Hall & utilities", "Hall electricity — August", 3_400_000, lbp, None, rania),
+            (16, "expense", "Badges & uniforms", "Scarves and woggles × 30", 270, usd, None, joseph),
+            (12, "expense", "Hall & utilities", "Hall electricity — September", 3_580_000, lbp, None, rania),
+            (10, "income", "Membership dues", "Monthly dues — October", 2160, usd, None, joseph),
+            (9, "income", "Donations", "Donation — Khoury family", 500, usd, None, rania),
+            (8, "expense", "Equipment", "Gas canisters × 12", 96, usd, None, joseph),
+            (6, "expense", "Food", "Snacks and water", 55, usd, football, karim),
+            (5, "expense", "Campsite & venue", "Campsite booking — Horsh Ehden", 300, usd, camp, rania),
+            (4, "income", "Participation fees", "Camp fees — 24 scouts × $60", 1440, usd, camp, rania),
+            (3, "expense", "Food", "Groceries for the camp", 9_800_000, lbp, camp, karim),
+            (2, "expense", "Transport", "Bus rental — return trip", 420, usd, camp, karim),
+        ]
+        for days, kind, cat, description, amount, currency, event, who in rows:
+            Entry.objects.create(
+                organization=org, kind=kind, date=today - timedelta(days=days), category=cats[cat],
+                description=description, amount=amount, currency=currency, rate=currency.rate, event=event,
+                created_by=who, updated_by=who,
+            )  # fmt: skip
 
     def add_arguments(self, parser):
         parser.add_argument("--reset", action="store_true", help="Delete the demo organization and its users first.")
@@ -678,6 +713,7 @@ class Command(BaseCommand):
 
         self.seed_events(org, units, youth, guardians, karim.membership.user)
         self.seed_inventory(org, units, youth, leaders, rania)
+        self.seed_finance(org, rania, karim.membership.user, leaders["joseph.a"][0].user)
 
         self.stdout.write(self.style.SUCCESS("Demo organization created."))
         self.stdout.write(

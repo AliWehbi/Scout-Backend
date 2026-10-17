@@ -8,6 +8,7 @@ from django.utils.translation import gettext as _
 from rest_framework.exceptions import ValidationError
 
 from apps.events.services import create_default_event_types
+from apps.finance.services import create_default_finance
 from apps.members import services as member_services
 from apps.members.models import Member
 from apps.permissions.models import PermissionGrant, RoleAssignment
@@ -49,6 +50,7 @@ def signup_organization(*, organization: dict, admin: dict, units: list[dict], b
     membership = OrgMembership.objects.create(organization=org, user=user, is_owner=True)
     RoleAssignment.objects.create(membership=membership, role=roles["org_admin"], assigned_by=user)
     create_default_event_types(org)
+    create_default_finance(org)
     for unit in units:
         Unit.objects.create(organization=org, **unit)
     return membership
