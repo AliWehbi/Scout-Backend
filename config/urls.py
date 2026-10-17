@@ -74,6 +74,7 @@ my_event_patterns = [
 api_v1 = [
     path("site/", SiteConfigView.as_view(), name="site-config"),
     path("guardians/options/", member_views.GuardianOptionsView.as_view(), name="guardian-options"),
+    path("guardians/contacts/", member_views.GuardianContactsView.as_view(), name="guardian-contacts"),
     path("my/family/", include(family_patterns)),
     path("my/events/", include(my_event_patterns)),
     path("my/calendar/", event_views.MyCalendarView.as_view(), name="my-calendar"),

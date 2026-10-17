@@ -155,11 +155,25 @@ class MemberSerializer(serializers.ModelSerializer):
     roles = RoleAssignmentSerializer(source="role_assignments", many=True, read_only=True)
     units = serializers.SerializerMethodField()
     member_id = serializers.SerializerMethodField()
+    member = serializers.SerializerMethodField()
+    guardian = serializers.SerializerMethodField()
     invitation = serializers.SerializerMethodField()
 
     class Meta:
         model = OrgMembership
-        fields = ["id", "user", "status", "is_owner", "member_id", "roles", "units", "invitation", "created_at"]
+        fields = [
+            "id",
+            "user",
+            "status",
+            "is_owner",
+            "member_id",
+            "member",
+            "guardian",
+            "roles",
+            "units",
+            "invitation",
+            "created_at",
+        ]
 
     def _member(self, obj):
         try:
@@ -170,6 +184,18 @@ class MemberSerializer(serializers.ModelSerializer):
     def get_member_id(self, obj):
         member = self._member(obj)
         return member.pk if member else None
+
+    def get_member(self, obj):
+        """The person on the Members page this login belongs to, if any."""
+        member = self._member(obj)
+        return {"id": member.pk, "full_name": member.full_name, "kind": member.kind} if member else None
+
+    def get_guardian(self, obj):
+        try:
+            guardian = obj.guardian
+        except ObjectDoesNotExist:
+            return None
+        return {"id": guardian.pk, "full_name": guardian.full_name}
 
     def get_units(self, obj):
         member = self._member(obj)
@@ -193,7 +219,12 @@ class MemberCreateSerializer(serializers.Serializer):
         default=False, help_text=_("Generate an invitation link/code instead of a password.")
     )
     roles = RoleAssignmentWriteSerializer(many=True, required=False)
-    units = UnitMembershipWriteSerializer(many=True, required=False)
+    member_id = serializers.IntegerField(
+        required=False, allow_null=True, help_text=_("The person on the Members page this login belongs to.")
+    )
+    guardian_id = serializers.IntegerField(
+        required=False, allow_null=True, help_text=_("An existing guardian (contact) this login belongs to.")
+    )
 
     def validate_username(self, value):
         return validate_username_value(value) if value else ""
@@ -211,10 +242,14 @@ class MemberCreateSerializer(serializers.Serializer):
             password_validation.validate_password(
                 attrs["password"], User(username=attrs.get("username", ""), first_name=attrs["first_name"])
             )
-        unit_ids = [u["unit"].pk for u in attrs.get("units", [])]
-        if len(unit_ids) != len(set(unit_ids)):
-            raise serializers.ValidationError({"units": _("Each unit can only be listed once.")})
         return attrs
+
+
+class LinkPeopleSerializer(serializers.Serializer):
+    """Which member and which guardian a login belongs to; null unlinks, a missing key keeps it."""
+
+    member_id = serializers.IntegerField(required=False, allow_null=True)
+    guardian_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class MemberUpdateSerializer(serializers.Serializer):

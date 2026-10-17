@@ -4,9 +4,12 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
+from django.utils.translation import gettext as _
+from rest_framework.exceptions import ValidationError
 
 from apps.events.services import create_default_event_types
 from apps.members import services as member_services
+from apps.members.models import Member
 from apps.permissions.models import PermissionGrant, RoleAssignment
 from apps.permissions.service import create_default_roles
 from apps.units.models import Unit
@@ -45,7 +48,6 @@ def signup_organization(*, organization: dict, admin: dict, units: list[dict], b
 
     membership = OrgMembership.objects.create(organization=org, user=user, is_owner=True)
     RoleAssignment.objects.create(membership=membership, role=roles["org_admin"], assigned_by=user)
-    member_services.ensure_member(membership, kind="adult")
     create_default_event_types(org)
     for unit in units:
         Unit.objects.create(organization=org, **unit)
@@ -63,8 +65,10 @@ def replace_role_assignments(membership, assignments: list[dict], actor) -> None
 
 
 def replace_unit_memberships(membership, unit_memberships: list[dict]) -> None:
-    """Units belong to the person (Member); a login without one gets a Member first."""
-    member = member_services.ensure_member(membership)
+    """Units belong to the person (Member), so the login must be linked to one."""
+    member = Member.objects.filter(membership=membership).first()
+    if member is None:
+        raise ValidationError({"detail": _("Link this user to a member before choosing units.")})
     member_services.replace_unit_memberships(member, unit_memberships)
 
 
@@ -130,10 +134,12 @@ def add_member(*, organization, actor, data: dict) -> tuple[OrgMembership, Invit
         status=MembershipStatus.INVITED if invite else MembershipStatus.ACTIVE,
     )
     replace_role_assignments(membership, data.get("roles", []), actor)
-    if data.get("units"):
-        replace_unit_memberships(membership, data["units"])
-    else:
-        member_services.sync_person_records(membership)
+    if data.get("member_id"):
+        member_services.link_member(membership, data["member_id"])
+    if data.get("guardian_id"):
+        member_services.link_guardian(membership, data["guardian_id"])
+    elif member_services.is_parent_only(membership):
+        member_services.ensure_guardian(membership)
     invitation = create_invitation(membership, actor) if invite else None
     return membership, invitation
 

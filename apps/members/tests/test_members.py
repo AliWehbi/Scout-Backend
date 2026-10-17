@@ -5,6 +5,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.audit.models import AuditLog
 from apps.members.models import ChangeRequest, CustomField, Guardian, GuardianLink, MedicalInfo, Member
+from apps.organizations.models import OrgMembership
 from apps.permissions.models import Permission, PermissionGrant
 from apps.units.models import UnitMembership
 
@@ -405,22 +406,113 @@ def test_give_access(org, client_for, anon):
     )
 
 
-def test_users_api_units_go_through_member(org, client_for):
-    client = client_for(org["admin"].user, org["org"])
-    res = client.post(
+def new_login(client, **extra):
+    return client.post(
         "/api/v1/users/",
-        {
-            "first_name": "Lina",
-            "username": "lina",
-            "password": "Hiking-Boots-42",
-            "units": [{"unit": org["cubs"].pk, "position": "leader"}],
-        },
+        {"first_name": "Lina", "username": "lina", "password": "Hiking-Boots-42", **extra},
         format="json",
     )
+
+
+def test_new_login_never_creates_a_member(org, client_for):
+    client = client_for(org["admin"].user, org["org"])
+    before = Member.objects.count()
+    res = new_login(client)
     assert res.status_code == 201, res.data
-    member = Member.objects.get(pk=res.data["member_id"])
-    assert member.kind == "adult" and member.unit_memberships.get().position == "leader"
-    assert res.data["units"][0]["unit"]["name_en"] == "Cubs"
+    assert res.data["member_id"] is None and res.data["member"] is None and res.data["units"] == []
+    assert Member.objects.count() == before
+    # units belong to a person, so they need a linked member first
+    res = client.put(f"/api/v1/users/{res.data['id']}/units/", {"units": [{"unit": org["cubs"].pk}]}, format="json")
+    assert res.status_code == 400
+    assert Member.objects.count() == before
+
+
+def test_new_login_linked_to_existing_member(org, client_for):
+    client = client_for(org["admin"].user, org["org"])
+    res = new_login(client, member_id=org["omar"].pk)
+    assert res.status_code == 201, res.data
+    assert res.data["member"] == {"id": org["omar"].pk, "full_name": "Omar Tannous", "kind": "youth"}
+    assert res.data["units"][0]["unit"]["name_en"] == "Scouts"
+    org["omar"].refresh_from_db()
+    assert org["omar"].membership_id == res.data["id"]
+    # units edited from the user page land on that member
+    res = client.put(
+        f"/api/v1/users/{res.data['id']}/units/",
+        {"units": [{"unit": org["cubs"].pk, "position": "leader"}]},
+        format="json",
+    )
+    assert res.status_code == 200 and org["omar"].unit_memberships.get().unit == org["cubs"]
+
+
+def test_new_login_rejects_member_with_login_or_from_other_org(org, world, client_for):
+    client = client_for(org["admin"].user, org["org"])
+    org["jad"].membership = org["karim"]
+    org["jad"].save()
+    res = new_login(client, member_id=org["jad"].pk)
+    assert res.status_code == 400 and "member_id" in res.data["errors"]
+    other = Member.objects.create(organization=world.org("Other"), first_name="Zed")
+    assert new_login(client, member_id=other.pk).status_code == 400
+    # nothing half-created
+    assert not OrgMembership.objects.filter(user__username="lina").exists()
+
+
+def test_link_and_unlink_member_from_user_page(org, client_for):
+    client = client_for(org["admin"].user, org["org"])
+    login = new_login(client).data["id"]
+    url = f"/api/v1/users/{login}/people/"
+    res = client.put(url, {"member_id": org["jad"].pk}, format="json")
+    assert res.status_code == 200 and res.data["member_id"] == org["jad"].pk
+    # switching to another person releases the first one
+    res = client.put(url, {"member_id": org["omar"].pk}, format="json")
+    assert res.data["member_id"] == org["omar"].pk
+    org["jad"].refresh_from_db()
+    assert org["jad"].membership_id is None
+    res = client.put(url, {"member_id": None}, format="json")
+    assert res.data["member_id"] is None
+    org["omar"].refresh_from_db()
+    assert org["omar"].membership_id is None and Member.objects.filter(pk=org["omar"].pk).exists()
+    # karim has no users.manage
+    assert (
+        client_for(org["karim"].user, org["org"]).put(url, {"member_id": org["jad"].pk}, format="json").status_code
+        == 403
+    )
+
+
+def test_users_filter_without_member(org, client_for):
+    client = client_for(org["admin"].user, org["org"])
+    org["jad"].membership = org["karim"]
+    org["jad"].save()
+    res = client.get("/api/v1/users/?has_member=false")
+    assert [m["user"]["username"] for m in res.data["results"]] == ["rania"]
+
+
+def test_parent_login_linked_to_existing_guardian_contact(org, client_for):
+    contact = Guardian.objects.create(organization=org["org"], first_name="Maya", email="maya@x.org")
+    GuardianLink.objects.create(member=org["jad"], guardian=contact, relationship="mother")
+    client = client_for(org["admin"].user, org["org"])
+    options = client.get("/api/v1/guardians/contacts/", {"email": "MAYA@x.org"}).data
+    assert [(o["id"], o["children"]) for o in options] == [(contact.pk, ["Jad Saliba"])]
+    parent_role = next(r for r in client.get("/api/v1/roles/").data["results"] if r["key"] == "parent")
+    res = new_login(client, guardian_id=contact.pk, roles=[{"role": parent_role["id"], "unit": None}])
+    assert res.status_code == 201, res.data
+    assert res.data["guardian"] == {"id": contact.pk, "full_name": "Maya"}
+    assert Guardian.objects.filter(organization=org["org"]).count() == 1
+    assert client.get("/api/v1/guardians/contacts/").data == []
+    login = OrgMembership.objects.get(pk=res.data["id"])
+    children = client_for(login.user, org["org"]).get("/api/v1/my/family/children/").data
+    assert [c["first_name"] for c in children] == ["Jad"]
+    # unlinking keeps the contact and its children
+    res = client.put(f"/api/v1/users/{login.pk}/people/", {"guardian_id": None}, format="json")
+    assert res.data["guardian"] is None
+    assert GuardianLink.objects.filter(guardian=contact).exists()
+    assert client_for(org["karim"].user, org["org"]).get("/api/v1/guardians/contacts/").status_code == 403
+
+
+def test_members_filter_by_email(org, client_for):
+    org["omar"].email = "omar@x.org"
+    org["omar"].save()
+    client = client_for(org["admin"].user, org["org"])
+    assert names(client.get("/api/v1/members/", {"email": "OMAR@x.org", "has_login": "false"})) == ["Omar"]
 
 
 def test_parent_only_user_becomes_guardian(org, client_for):

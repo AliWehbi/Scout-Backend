@@ -1,6 +1,7 @@
 import pytest
 from django.contrib.auth import get_user_model
 
+from apps.members.models import Member
 from apps.organizations.models import Invitation, OrgMembership
 from apps.permissions.models import Role
 from apps.units.models import Unit
@@ -32,6 +33,8 @@ def test_signup_creates_org_owner_roles_and_units(db, anon):
     membership = OrgMembership.objects.get(pk=m["id"])
     assert Unit.objects.filter(organization=membership.organization).count() == 2
     assert Role.objects.filter(organization=membership.organization, is_system=True).count() == 7
+    # the owner is a login only; they add themselves on the Members page if they're a member
+    assert not Member.objects.filter(organization=membership.organization).exists()
 
 
 def test_signup_rejects_duplicate_username(world, anon):
@@ -60,14 +63,13 @@ def test_add_member_with_password_and_sign_in(org_setup, client_for, anon):
             "username": "omar.t",
             "password": "Hiking-Boots-42",
             "roles": [{"role": scout_role["id"], "unit": org_setup["cubs"].pk}],
-            "units": [{"unit": org_setup["cubs"].pk, "position": "member"}],
         },
         format="json",
     )
     assert res.status_code == 201, res.data
     assert res.data["status"] == "active"
     assert res.data["user"]["has_email"] is False
-    assert res.data["units"][0]["unit"]["name_en"] == "Cubs"
+    assert res.data["member_id"] is None
     assert (
         anon.post(
             "/api/v1/auth/login/", {"identifier": "omar.t", "password": "Hiking-Boots-42"}, format="json"
@@ -78,21 +80,24 @@ def test_add_member_with_password_and_sign_in(org_setup, client_for, anon):
 
 def test_member_in_multiple_units(org_setup, world, client_for):
     scouts = world.unit(org_setup["org"], "Scouts")
+    karim = Member.objects.create(organization=org_setup["org"], first_name="Karim", kind="adult")
     client = client_for(org_setup["admin"].user, org_setup["org"])
     res = client.post(
         "/api/v1/users/",
-        {
-            "first_name": "Karim",
-            "username": "karim",
-            "password": "Hiking-Boots-42",
-            "units": [
-                {"unit": org_setup["cubs"].pk, "position": "leader"},
-                {"unit": scouts.pk, "position": "assistant"},
-            ],
-        },
+        {"first_name": "Karim", "username": "karim", "password": "Hiking-Boots-42", "member_id": karim.pk},
         format="json",
     )
     assert res.status_code == 201, res.data
+    res = client.put(
+        f"/api/v1/users/{res.data['id']}/units/",
+        {
+            "units": [
+                {"unit": org_setup["cubs"].pk, "position": "leader"},
+                {"unit": scouts.pk, "position": "assistant"},
+            ]
+        },
+        format="json",
+    )
     assert {u["position"] for u in res.data["units"]} == {"leader", "assistant"}
     leaders = client.get("/api/v1/users/?kind=leaders").data["results"]
     assert any(m["user"]["username"] == "karim" for m in leaders)

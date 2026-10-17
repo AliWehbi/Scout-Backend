@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.db import transaction
 from django.db.models import Count, Prefetch, Q
 from django.http import Http404
 from django.utils import timezone
@@ -18,6 +19,7 @@ from apps.audit.serializers import AuditLogSerializer
 from apps.audit.services import log_action
 from apps.core.models import SiteSettings
 from apps.core.tenancy import TenantScopedMixin, get_active_membership
+from apps.members import services as member_services
 from apps.members.models import Certification, ChangeRequest, Member, MemberKind, MemberStatus, RequestStatus
 from apps.members.services import missing_info_q, scope_members
 from apps.permissions.drf import HasOrgPermission, IsOrgMember, get_permission_service
@@ -38,6 +40,7 @@ from .serializers import (
     AcceptInvitationSerializer,
     InvitationPublicSerializer,
     InvitationSerializer,
+    LinkPeopleSerializer,
     MemberCreateSerializer,
     MemberSerializer,
     MemberUpdateSerializer,
@@ -252,6 +255,7 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         "destroy": "users.manage",
         "set_password": "users.manage",
         "units": "users.manage",
+        "people": "users.manage",
         "invitation": "users.manage",
         "roles": "permissions.manage",
         "set_permissions": "permissions.manage",
@@ -263,7 +267,7 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         qs = (
             OrgMembership.objects.filter(organization=self.organization)
-            .select_related("user")
+            .select_related("user", "member", "guardian")
             .prefetch_related(
                 Prefetch("role_assignments", queryset=RoleAssignment.objects.select_related("role", "unit")),
                 Prefetch("member__unit_memberships", queryset=UnitMembership.objects.select_related("unit", "patrol")),
@@ -277,6 +281,8 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             qs = qs.filter(role_assignments__role_id=params["role"])
         if params.get("unit"):
             qs = qs.filter(member__unit_memberships__unit_id=params["unit"])
+        if params.get("has_member") in ("true", "false"):
+            qs = qs.filter(member__isnull=params["has_member"] == "false")
         kind = params.get("kind")
         if kind == "leaders":
             qs = qs.filter(
@@ -404,6 +410,27 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             target=membership,
             changes={"units": [[u["unit"].pk, u["position"]] for u in serializer.validated_data["units"]]},
         )
+        return self._member_response(membership)
+
+    @action(detail=True, methods=["put"])
+    def people(self, request, pk=None):
+        """Link the login to a person on the Members page and/or a guardian; null unlinks."""
+        membership = self.get_object()
+        serializer = LinkPeopleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        changes = {}
+        with transaction.atomic():
+            if "member_id" in data:
+                member_services.link_member(membership, data["member_id"])
+                changes["member"] = data["member_id"]
+            if "guardian_id" in data:
+                member_services.link_guardian(membership, data["guardian_id"])
+                changes["guardian"] = data["guardian_id"]
+        if changes:
+            log_action(
+                request, "member.people_linked", organization=self.organization, target=membership, changes=changes
+            )
         return self._member_response(membership)
 
     @action(detail=True, methods=["put"])

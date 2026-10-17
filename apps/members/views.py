@@ -230,6 +230,8 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             qs = qs.filter(services.missing_info_q())
         if p.get("has_login") in ("true", "false"):
             qs = qs.filter(membership__isnull=p["has_login"] == "false")
+        if p.get("email", "").strip():
+            qs = qs.filter(email__iexact=p["email"].strip())
         qs = qs.distinct()
         if p.get("sort"):
             qs = sort_members(qs, p["sort"], self.organization)
@@ -907,3 +909,39 @@ class GuardianOptionsView(APIView):
                 }
             )
         return Response(options)
+
+
+class GuardianContactsView(APIView):
+    """Guardians without a login (contacts added on a member's Guardians tab), to give one a login."""
+
+    permission_classes = [permissions.IsAuthenticated, IsOrgMember]
+
+    def get(self, request):
+        if not get_permission_service(request).has_perm("users.manage"):
+            raise PermissionDenied
+        org = get_active_membership(request).organization
+        q = request.query_params.get("search", "").strip()
+        email = request.query_params.get("email", "").strip()
+        guardians = Guardian.objects.filter(organization=org, membership__isnull=True).prefetch_related(
+            Prefetch("links", queryset=GuardianLink.objects.select_related("member"))
+        )
+        if q:
+            guardians = guardians.filter(
+                Q(first_name__icontains=q) | Q(last_name__icontains=q) | Q(email__icontains=q) | Q(phone__icontains=q)
+            )
+        if email:
+            guardians = guardians.filter(email__iexact=email)
+        return Response(
+            [
+                {
+                    "id": g.pk,
+                    "full_name": g.full_name,
+                    "first_name": g.first_name,
+                    "last_name": g.last_name,
+                    "email": g.email,
+                    "phone": g.phone,
+                    "children": [link.member.full_name for link in g.links.all()],
+                }
+                for g in guardians.order_by("first_name", "last_name")[:30]
+            ]
+        )

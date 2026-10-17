@@ -48,30 +48,19 @@ MEDICAL_FIELDS = {f.split(".", 1)[1] for f in PARENT_EDITABLE_FIELDS if f.starts
 
 
 # ---------------------------------------------------------------- logins <-> people
+#
+# A login never creates a Member on its own: people are added on the Members page and a
+# login is linked to them explicitly (give access, or picking the person for a login).
+# Parents are not members of the organization, only their children are.
 
 
 def role_keys(membership) -> set[str]:
     return set(membership.role_assignments.values_list("role__key", flat=True))
 
 
-def ensure_member(membership, *, kind: str | None = None) -> Member:
-    """The Member record for a login, created from the user's details if missing."""
-    member = Member.objects.filter(membership=membership).first()
-    if member is not None:
-        return member
-    user = membership.user
-    if kind is None:
-        kind = (
-            MemberKind.ADULT if (membership.is_owner or role_keys(membership) & ADULT_ROLE_KEYS) else MemberKind.YOUTH
-        )
-    return Member.objects.create(
-        organization=membership.organization,
-        membership=membership,
-        first_name=user.first_name or user.username,
-        last_name=user.last_name,
-        email=user.email or "",
-        kind=kind,
-    )
+def is_parent_only(membership) -> bool:
+    keys = role_keys(membership)
+    return not membership.is_owner and bool(keys) and keys <= {"parent"}
 
 
 def ensure_guardian(membership) -> Guardian:
@@ -88,13 +77,52 @@ def ensure_guardian(membership) -> Guardian:
     )
 
 
-def sync_person_records(membership, has_units: bool = False) -> None:
-    """A parent-only login becomes a Guardian; everyone else is a Member."""
-    keys = role_keys(membership)
-    if not has_units and not membership.is_owner and keys and keys <= {"parent"}:
-        ensure_guardian(membership)
-    else:
-        ensure_member(membership)
+def linkable_member(organization, member_id, membership=None) -> Member:
+    """A person of this organization without a login (or already linked to `membership`)."""
+    member = Member.objects.select_for_update().filter(organization=organization, pk=member_id).first()
+    if member is None:
+        raise ValidationError({"member_id": [_("Unknown member.")]})
+    if member.membership_id and (membership is None or member.membership_id != membership.pk):
+        raise ValidationError({"member_id": [_("This member already has a login.")]})
+    return member
+
+
+def linkable_guardian(organization, guardian_id, membership=None) -> Guardian:
+    """A guardian of this organization without a login (or already linked to `membership`)."""
+    guardian = Guardian.objects.select_for_update().filter(organization=organization, pk=guardian_id).first()
+    if guardian is None:
+        raise ValidationError({"guardian_id": [_("Unknown guardian.")]})
+    if guardian.membership_id and (membership is None or guardian.membership_id != membership.pk):
+        raise ValidationError({"guardian_id": [_("This guardian already has a login.")]})
+    return guardian
+
+
+@transaction.atomic
+def link_member(membership, member_id: int | None) -> Member | None:
+    """Point the login at this person (or at nobody); the previous person keeps their record."""
+    current = Member.objects.filter(membership=membership).first()
+    member = linkable_member(membership.organization, member_id, membership) if member_id else None
+    if current is not None and current != member:
+        current.membership = None
+        current.save(update_fields=["membership", "updated_at"])
+    if member is not None and member.membership_id != membership.pk:
+        member.membership = membership
+        member.save(update_fields=["membership", "updated_at"])
+    return member
+
+
+@transaction.atomic
+def link_guardian(membership, guardian_id: int | None) -> Guardian | None:
+    """Point the login at this guardian (or at nobody); the guardian stays linked to their children."""
+    current = Guardian.objects.filter(membership=membership).first()
+    guardian = linkable_guardian(membership.organization, guardian_id, membership) if guardian_id else None
+    if current is not None and current != guardian:
+        current.membership = None
+        current.save(update_fields=["membership", "updated_at"])
+    if guardian is not None and guardian.membership_id != membership.pk:
+        guardian.membership = membership
+        guardian.save(update_fields=["membership", "updated_at"])
+    return guardian
 
 
 def replace_unit_memberships(member: Member, rows: list[dict]) -> None:
