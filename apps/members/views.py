@@ -213,8 +213,10 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             qs = qs.filter(status=p["status"])
         if p.get("kind"):
             qs = qs.filter(kind=p["kind"])
-        if p.get("unit"):
-            qs = qs.filter(unit_memberships__unit_id=p["unit"])
+        # One unit or several (comma separated): members in any of them.
+        unit_ids = [int(u) for u in p.get("unit", "").split(",") if u.strip().isdigit()]
+        if unit_ids:
+            qs = qs.filter(unit_memberships__unit_id__in=unit_ids)
         if p.get("position"):
             qs = qs.filter(unit_memberships__position=p["position"])
         if p.get("patrol"):

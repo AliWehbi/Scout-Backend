@@ -115,6 +115,10 @@ def test_tabs_counts_and_filters(org, client_for):
     assert names(client.get("/api/v1/members/?tab=leaders")) == ["No"]
     assert names(client.get(f"/api/v1/members/?unit={org['cubs'].pk}&tab=youth")) == ["Jad"]
     assert names(client.get("/api/v1/members/?missing_info=1")) == ["Jad"]
+    # several units: members in any of them (the loner leads Cubs, Omar is in Scouts)
+    both = f"{org['cubs'].pk},{org['scouts'].pk}"
+    assert names(client.get(f"/api/v1/members/?unit={both}")) == ["Jad", "No", "Omar"]
+    assert names(client.get(f"/api/v1/members/?unit={org['scouts'].pk},x")) == ["Omar"]
 
 
 def test_medical_requires_permission_and_is_audited(org, world, client_for):
