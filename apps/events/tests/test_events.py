@@ -367,3 +367,64 @@ def test_excused_counted_as_absent(setup, client_for):
     # Parents see both numbers too.
     child = client_for(setup["maya"].user, setup["org"]).get("/api/v1/my/family/children/").data[0]
     assert child["attendance"]["rate"] == 100 and child["attendance"]["rate_strict"] == 50
+
+
+def test_closing_locks_the_event(setup, world, client_for):
+    from apps.inventory.models import Item
+
+    org = setup["org"]
+    karim_member = Member.objects.create(organization=org, first_name="Karim", membership=setup["karim"])
+    other = world.member(org, world.user("nour"), roles=[("unit_leader", setup["cubs"])])
+    other_member = Member.objects.create(organization=org, first_name="Nour", membership=other)
+    karim, nour = client_for(setup["karim"].user, org), client_for(other.user, org)
+    admin, parent = client_for(setup["admin"].user, org), client_for(setup["maya"].user, org)
+    event = create_event(
+        karim, setup, requires_consent=True, consent_text="ok", leaders=[karim_member.pk, other_member.pk]
+    )
+    url = f"/api/v1/events/{event['id']}"
+    karim.post(f"{url}/invite/", {"members": [setup["jad"].pk, setup["lea"].pk]}, format="json")
+    rows = {r["full_name"]: r for r in karim.get(f"{url}/invitations/").data}
+    jad_inv, lea_inv = rows["Jad"]["id"], rows["Lea"]["id"]
+    parent.post(f"/api/v1/my/events/invitations/{jad_inv}/respond/", {"response": "going"})
+
+    # Only the event's own leaders close it: not even the owner, who isn't listed as a leader.
+    assert admin.get(f"{url}/").data["can_close"] is False
+    assert admin.post(f"{url}/close/").status_code == 403
+    assert karim.get(f"{url}/").data["can_close"] is True
+    res = karim.post(f"{url}/close/")
+    assert res.status_code == 200 and res.data["closed_at"] and res.data["closed_by_name"] == "karim"
+    assert res.data["can_reopen"] is True and res.data["can_close"] is False
+
+    # Everything is read-only now.
+    tent = Item.objects.create(organization=org, name_en="Tent", kind="counted", quantity=4)
+    blocked = [
+        karim.patch(f"{url}/", {"title": "Changed"}, format="json"),
+        karim.post(f"{url}/invite/", {"members": [setup["hadi"].pk]}, format="json"),
+        karim.delete(f"{url}/invitations/{lea_inv}/"),
+        karim.post(f"{url}/invitations/{lea_inv}/respond/", {"response": "maybe"}),
+        karim.put(f"{url}/attendance/", {"date": event["start_date"], "records": [{"member": setup["jad"].pk, "status": "present"}]}, format="json"),
+        karim.post(f"{url}/cancel/"),
+        karim.delete(f"{url}/"),
+        parent.post(f"/api/v1/my/events/invitations/{jad_inv}/respond/", {"response": "not_going"}),
+        parent.post(f"/api/v1/my/events/invitations/{jad_inv}/sign/", {"name": "Maya", "agree": True}),
+        admin.post(f"{url}/gear/", {"item": tent.pk, "quantity": 1}, format="json"),
+    ]  # fmt: skip
+    assert [r.status_code for r in blocked] == [400] * len(blocked)
+    assert karim.get(f"{url}/attendance/").data["can_take"] is False
+    mine = parent.get("/api/v1/my/events/").data[0]
+    assert mine["closed"] is True and mine["people"][0]["can_reply"] is False and mine["people"][0]["can_sign"] is False
+    assert admin.get(f"{url}/gear/").data["can_edit"] is False
+
+    # Another leader of the event can't reopen it; the leader who closed it, or an admin, can.
+    assert nour.get(f"{url}/").data["can_reopen"] is False
+    assert nour.post(f"{url}/reopen/").status_code == 403
+    assert admin.get(f"{url}/").data["can_reopen"] is True
+    assert admin.post(f"{url}/reopen/").status_code == 200
+    assert karim.post(f"{url}/invite/", {"members": [setup["hadi"].pk]}, format="json").status_code == 200
+    karim.post(f"{url}/close/")
+    res = karim.post(f"{url}/reopen/")
+    assert res.status_code == 200 and res.data["closed_at"] is None
+    from apps.audit.models import AuditLog
+
+    assert AuditLog.objects.filter(action="event.closed").count() == 2
+    assert AuditLog.objects.filter(action="event.reopened").count() == 2

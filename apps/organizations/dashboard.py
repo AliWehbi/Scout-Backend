@@ -400,7 +400,7 @@ def events_block(service, org, today: date):
     consent, replies, waitlist = [], [], []
     for e in upcoming:
         brief = {"event_id": e.pk, "title": e.title, "start_date": e.start_date}
-        if e.requires_consent and e.n_going > e.n_signed:
+        if e.requires_consent and e.n_going > e.n_signed and not e.is_closed:
             consent.append({**brief, "count": e.n_going - e.n_signed})
         due = e.reply_deadline
         if e.replies_open and e.n_no_reply and ((due and due <= soon) or e.start_date <= soon):

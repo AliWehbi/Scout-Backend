@@ -72,6 +72,12 @@ class Event(TenantModel):
     requires_consent = models.BooleanField(default=False)
     consent_text = models.TextField(blank=True)
     status = models.CharField(max_length=10, choices=EventStatus.choices, default=EventStatus.DRAFT)
+    # A closed event is read-only (details, participants, replies, consent, attendance, gear).
+    # Only the event's leaders can close it; the leader who closed it (or an org admin) reopens it.
+    closed_at = models.DateTimeField(null=True, blank=True)
+    closed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
     # Events created together with "Repeat weekly" share a series id.
     series = models.UUIDField(null=True, blank=True, db_index=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+")
@@ -90,8 +96,12 @@ class Event(TenantModel):
         return [self.start_date + timedelta(days=i) for i in range(span + 1)]
 
     @property
+    def is_closed(self) -> bool:
+        return self.closed_at is not None
+
+    @property
     def replies_open(self) -> bool:
-        if self.status != EventStatus.PUBLISHED:
+        if self.status != EventStatus.PUBLISHED or self.is_closed:
             return False
         return self.reply_deadline is None or date.today() <= self.reply_deadline
 

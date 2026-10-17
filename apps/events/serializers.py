@@ -87,6 +87,7 @@ class EventSerializer(serializers.ModelSerializer):
             "requires_consent",
             "consent_text",
             "status",
+            "closed_at",
             "series",
             "counts",
             "created_at",
@@ -94,7 +95,7 @@ class EventSerializer(serializers.ModelSerializer):
             "resign_required",
             "publish",
         ]
-        read_only_fields = ["id", "status", "series", "created_at"]
+        read_only_fields = ["id", "status", "closed_at", "series", "created_at"]
 
     def get_counts(self, obj):
         if not hasattr(obj, "n_invited"):

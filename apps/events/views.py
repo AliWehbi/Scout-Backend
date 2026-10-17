@@ -4,6 +4,7 @@ from django.db import transaction
 from django.db.models import Count, Prefetch
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
@@ -118,6 +119,11 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         data["can_manage"] = services.can_manage(self.service, event)
         data["can_check_in"] = services.can_check_in(self.service, event)
         data["leader_names"] = [m.full_name for m in event.leaders.all()]
+        membership = get_active_membership(self.request)
+        data["closed_at"] = event.closed_at
+        data["closed_by_name"] = event.closed_by.get_full_name() or event.closed_by.username if event.closed_by else ""
+        data["can_close"] = services.can_close(membership, event)
+        data["can_reopen"] = services.can_reopen(membership, event)
         return data
 
     def retrieve(self, request, *args, **kwargs):
@@ -159,6 +165,7 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         partial = kwargs.pop("partial", False)
         event = self.get_object()
         self.require_manage(event)
+        services.require_open(event)
         serializer = self.get_serializer(event, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
@@ -193,6 +200,7 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         event = self.get_object()
         self.require_manage(event)
+        services.require_open(event)
         if AttendanceRecord.objects.filter(session__event=event).exists():
             raise ValidationError(_("Attendance was taken for this event. Cancel it instead."))
         log_action(request, "event.deleted", organization=self.organization, target=event)
@@ -203,6 +211,7 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def publish(self, request, pk=None):
         event = self.get_object()
         self.require_manage(event)
+        services.require_open(event)
         if event.status != EventStatus.PUBLISHED:
             event.status = EventStatus.PUBLISHED
             event.save(update_fields=["status", "updated_at"])
@@ -213,10 +222,38 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def cancel(self, request, pk=None):
         event = self.get_object()
         self.require_manage(event)
+        services.require_open(event)
         if event.status != EventStatus.CANCELLED:
             event.status = EventStatus.CANCELLED
             event.save(update_fields=["status", "updated_at"])
             log_action(request, "event.cancelled", organization=self.organization, target=event)
+        return Response(self.detail_data(event))
+
+    @action(detail=True, methods=["post"])
+    def close(self, request, pk=None):
+        """Lock the event: nothing about it, its participants or its attendance can change."""
+        event = self.get_object()
+        if event.is_closed:
+            raise ValidationError(_("This event is already closed."))
+        if not services.can_close(get_active_membership(request), event):
+            raise PermissionDenied(_("Only the event's leaders can close it."))
+        event.closed_at = timezone.now()
+        event.closed_by = request.user
+        event.save(update_fields=["closed_at", "closed_by", "updated_at"])
+        log_action(request, "event.closed", organization=self.organization, target=event)
+        return Response(self.detail_data(event))
+
+    @action(detail=True, methods=["post"])
+    def reopen(self, request, pk=None):
+        event = self.get_object()
+        if not event.is_closed:
+            raise ValidationError(_("This event isn't closed."))
+        if not services.can_reopen(get_active_membership(request), event):
+            raise PermissionDenied(_("Only the leader who closed this event, or an admin, can reopen it."))
+        event.closed_at = None
+        event.closed_by = None
+        event.save(update_fields=["closed_at", "closed_by", "updated_at"])
+        log_action(request, "event.reopened", organization=self.organization, target=event)
         return Response(self.detail_data(event))
 
     @action(detail=True, methods=["get"], throttle_classes=[DocumentThrottle])
@@ -249,6 +286,7 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def invite(self, request, pk=None):
         event = self.get_object()
         self.require_manage(event)
+        services.require_open(event)
         if event.status == EventStatus.CANCELLED:
             raise ValidationError(_("This event was cancelled."))
         serializer = InviteSerializer(data=request.data)
@@ -279,6 +317,7 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def uninvite(self, request, pk=None, invitation_id=None):
         event = self.get_object()
         self.require_manage(event)
+        services.require_open(event)
         invitation = self.get_invitation(event, invitation_id)
         invitation.delete()
         services.promote_waitlist(event)
@@ -290,6 +329,7 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         """A leader records a reply on someone's behalf."""
         event = self.get_object()
         self.require_manage(event)
+        services.require_open(event)
         invitation = self.get_invitation(event, invitation_id)
         serializer = RespondSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -315,7 +355,7 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
             "is_mandatory": event.is_mandatory,
             "counts": counts,
             "roster": roster,
-            "can_take": services.can_check_in(self.service, event),
+            "can_take": services.can_check_in(self.service, event) and not event.is_closed,
         }
 
     @action(detail=True, methods=["get", "put"])
@@ -334,6 +374,7 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 
         if not services.can_check_in(self.service, event):
             raise PermissionDenied(_("You can't take attendance for this event."))
+        services.require_open(event)
         serializer = EventAttendanceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         day = serializer.validated_data["date"]
@@ -380,7 +421,10 @@ def my_event_payload(event: Event, invitations: list[EventInvitation], membershi
                 "waitlist_position": position,
                 "can_reply": as_ is not None and event.replies_open,
                 "needs_signature": services.needs_signature(inv),
-                "can_sign": guardian is not None and inv.member_id in children and services.needs_signature(inv),
+                "can_sign": guardian is not None
+                and inv.member_id in children
+                and services.needs_signature(inv)
+                and not event.is_closed,
                 "signature": {"name": sig.signer_name, "signed_at": sig.signed_at} if sig else None,
             }
         )
@@ -401,6 +445,7 @@ def my_event_payload(event: Event, invitations: list[EventInvitation], membershi
         "requires_consent": event.requires_consent,
         "consent_text": event.consent_text,
         "status": event.status,
+        "closed": event.is_closed,
         "people": people,
     }
 
@@ -446,6 +491,7 @@ class MyInvitationRespondView(MyInvitationMixin, APIView):
         role = services.responder_role(invitation, membership)
         if role is None:
             raise PermissionDenied()
+        services.require_open(invitation.event)
         if not invitation.event.replies_open:
             raise ValidationError(_("Replies are closed for this event."))
         serializer = RespondSerializer(data=request.data)
@@ -460,6 +506,7 @@ class MyInvitationSignView(MyInvitationMixin, APIView):
         _me, guardian, children = services.my_people(membership)
         if guardian is None or invitation.member_id not in children:
             raise PermissionDenied(_("Only a parent or guardian can sign."))
+        services.require_open(invitation.event)
         serializer = SignSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         services.sign(invitation, guardian=guardian, user=request.user, name=serializer.validated_data["name"])

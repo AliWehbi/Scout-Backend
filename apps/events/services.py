@@ -93,6 +93,33 @@ def can_check_in(service, event: Event) -> bool:
     return any(service.has_perm("events.check_in", u) for u in unit_ids)
 
 
+# ---------------------------------------------------------------- closing
+
+
+def require_open(event: Event) -> None:
+    """Every change to an event, its participants or its attendance stops while it is closed."""
+    if event.is_closed:
+        raise ValidationError(_("This event is closed. Reopen it to make changes."))
+
+
+def is_org_admin(membership) -> bool:
+    return membership.is_owner or membership.role_assignments.filter(role__key="org_admin", unit__isnull=True).exists()
+
+
+def can_close(membership, event: Event) -> bool:
+    """Only the event's own leaders close it."""
+    if event.is_closed or membership is None:
+        return False
+    return event.leaders.filter(membership=membership).exists()
+
+
+def can_reopen(membership, event: Event) -> bool:
+    """The leader who closed it, or an org admin when that person isn't available."""
+    if not event.is_closed or membership is None:
+        return False
+    return event.closed_by_id == membership.user_id or is_org_admin(membership)
+
+
 def with_counts(qs: QuerySet) -> QuerySet:
     going = Q(invitations__response=Response.GOING, invitations__waitlisted=False)
     return qs.annotate(

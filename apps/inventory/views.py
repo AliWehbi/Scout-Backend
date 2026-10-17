@@ -556,7 +556,12 @@ class EventGearView(APIView):
 
     def payload(self, request, event):
         _view, can_edit, can_check_out = event_rights(request, event)
-        return {"rows": services.gear_list(event), "can_edit": can_edit, "can_check_out": can_check_out}
+        closed = event.is_closed  # a closed event's gear list is read-only
+        return {
+            "rows": services.gear_list(event),
+            "can_edit": can_edit and not closed,
+            "can_check_out": can_check_out and not closed,
+        }
 
     def get(self, request, event_id):
         event = self.get_event(request, event_id)
@@ -570,6 +575,7 @@ class EventGearView(APIView):
         _v, can_edit, _c = event_rights(request, event)
         if not can_edit:
             raise PermissionDenied()
+        event_services.require_open(event)
         serializer = ReserveSerializer(data={**request.data, "event": event.pk})
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -582,6 +588,7 @@ class EventGearCheckOutView(EventGearView):
     def post(self, request, event_id):
         event = self.get_event(request, event_id)
         require(request, CHECK_OUT)
+        event_services.require_open(event)
         loan, warnings = services.check_out_event_gear(event, actor=request.user)
         log_action(request, "inventory.checked_out", organization=event.organization, target=loan)
         return Response({**self.payload(request, event), "loan": loan.pk, "warnings": warnings})
