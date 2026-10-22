@@ -10,6 +10,7 @@ from apps.accounts import views as account_views
 from apps.attendance.views import AttendanceReportView, SessionViewSet
 from apps.audit.views import AuditLogViewSet
 from apps.core.views import HealthView, SiteConfigView
+from apps.customfields import views as custom_field_views
 from apps.documents.views import DocumentTemplateViewSet
 from apps.events import views as event_views
 from apps.finance import views as finance_views
@@ -25,7 +26,7 @@ router.register("units", UnitViewSet, basename="unit")
 router.register("roles", RoleViewSet, basename="role")
 router.register("audit-logs", AuditLogViewSet, basename="audit-log")
 router.register("members", member_views.MemberViewSet, basename="person")
-router.register("custom-fields", member_views.CustomFieldViewSet, basename="custom-field")
+router.register("custom-fields", custom_field_views.CustomFieldViewSet, basename="custom-field")
 router.register("change-requests", member_views.ChangeRequestViewSet, basename="change-request")
 router.register("patrols", PatrolViewSet, basename="patrol")
 router.register("attendance/sessions", SessionViewSet, basename="session")

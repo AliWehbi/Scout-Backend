@@ -5,6 +5,7 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 from apps.core.models import TenantModel, TimeStampedModel
+from apps.customfields.models import AppliesTo, CustomField, FieldSection, FieldType  # noqa: F401 (moved there)
 
 
 class MemberStatus(models.TextChoices):
@@ -182,53 +183,6 @@ class Certification(TimeStampedModel):
 
     class Meta:
         ordering = ["expires_on", "name"]
-
-
-class FieldType(models.TextChoices):
-    TEXT = "text", _("Text")
-    NUMBER = "number", _("Number")
-    DATE = "date", _("Date")
-    YES_NO = "yesno", _("Yes / No")
-    CHOICE = "choice", _("Choice")
-    MULTI = "multi", _("Multiple choice")
-
-
-class AppliesTo(models.TextChoices):
-    YOUTH = "youth", _("Youth members")
-    ADULT = "adult", _("Adults")
-    ALL = "all", _("Everyone")
-
-
-class FieldSection(models.TextChoices):
-    ADDITIONAL = "additional", _("Additional information")
-    MEDICAL = "medical", _("Medical & emergency")
-
-
-class CustomField(TenantModel):
-    """An extra member field defined by the organization. Values live in Member.custom_data[key]."""
-
-    key = models.SlugField(max_length=60)
-    label_en = models.CharField(max_length=120)
-    label_ar = models.CharField(max_length=120, blank=True)
-    field_type = models.CharField(max_length=10, choices=FieldType.choices, default=FieldType.TEXT)
-    options = models.JSONField(default=list, blank=True)
-    applies_to = models.CharField(max_length=10, choices=AppliesTo.choices, default=AppliesTo.ALL)
-    section = models.CharField(max_length=12, choices=FieldSection.choices, default=FieldSection.ADDITIONAL)
-    required = models.BooleanField(default=False)
-    visible_to_parents = models.BooleanField(default=True)
-    editable_by_parents = models.BooleanField(default=False)
-    order = models.PositiveIntegerField(default=0)
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        ordering = ["order", "id"]
-        constraints = [models.UniqueConstraint(fields=["organization", "key"], name="custom_field_org_key_unique")]
-
-    def applies(self, member: Member) -> bool:
-        return self.applies_to == AppliesTo.ALL or self.applies_to == member.kind
-
-    def __str__(self):
-        return self.label_en
 
 
 class RequestStatus(models.TextChoices):

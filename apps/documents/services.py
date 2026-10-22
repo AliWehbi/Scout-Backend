@@ -4,7 +4,9 @@ import hashlib
 import io
 import logging
 import re
+import zipfile
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 
 from django.utils.translation import gettext as _
@@ -57,7 +59,7 @@ def _render(job: RenderJob, *, upload: bool) -> bytes:
 # ------------------------------------------------------------------ uploads
 
 
-def read_upload(upload, kind: str) -> bytes:
+def read_upload(upload, kind: str, organization=None) -> bytes:
     """Returns the bytes of a safe template that fills in correctly, or raises a ValidationError."""
     if not (upload.name or "").lower().endswith(".docx"):
         raise ValidationError({"file": [_("Upload a Word document (.docx).")]})
@@ -68,7 +70,7 @@ def read_upload(upload, kind: str) -> bytes:
     _render(
         RenderJob(
             data,
-            registry.sample_context(kind),
+            registry.sample_context(kind, organization=organization),
             strict=True,
             allowed_roots=registry.allowed_roots(kind),
         ),
@@ -143,10 +145,17 @@ def logo_png(organization) -> bytes | None:
 
 
 def export_event(
-    event, *, kind: str, template: DocumentTemplate | None, lang: str, user, day: date | None = None
+    event,
+    *,
+    kind: str,
+    template: DocumentTemplate | None,
+    lang: str,
+    user,
+    day: date | None = None,
+    overrides: dict | None = None,
 ) -> bytes:
     data = stored_bytes(template) if template else starter_bytes(kind, lang)
-    context = registry.build_context(kind, event, lang=lang, user=user, day=day)
+    context = registry.build_context(kind, event, lang=lang, user=user, day=day, overrides=overrides)
     return _render(RenderJob(data, context, logo=logo_png(event.organization)), upload=False)
 
 
@@ -160,3 +169,21 @@ def export_filename(event, kind: str, lang: str, day: date | None) -> str:
     if kind == DocumentKind.ATTENDANCE_SHEET and day:
         parts.append(day.isoformat())
     return clean_filename(" - ".join(parts), limit=150) + ".docx"
+
+
+_TAG_RE = re.compile(rb"<[^>]+>")
+
+
+def used_custom_codes(data: bytes, org_code: str) -> set[str]:
+    """
+    The custom field codes a template uses ({{ event.<org code>_<code> }}). Word often splits a
+    placeholder across several runs, so the XML tags are removed before searching the text.
+    """
+    pattern = re.compile(rb"event\.\s*" + re.escape(org_code.encode()) + rb"_([a-z][a-z0-9_]*)")
+    found: set[str] = set()
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        for info in zf.infolist():
+            if info.filename.startswith("word/") and info.filename.endswith(".xml") and info.file_size < 20_000_000:
+                text = _TAG_RE.sub(b"", zf.read(info))
+                found.update(m.decode() for m in pattern.findall(text))
+    return found

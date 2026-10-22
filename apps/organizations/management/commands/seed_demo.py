@@ -476,6 +476,36 @@ class Command(BaseCommand):
                 created_by=who, updated_by=who,
             )  # fmt: skip
 
+    def seed_event_fields(self, org):
+        """Event custom fields with template codes, and values on the camp."""
+        activity = EventType.objects.filter(organization=org, name_en="Activity").first()
+        point = CustomField.objects.create(
+            organization=org, entity="event", key="meeting_point", code="meeting_point", label_en="Meeting point",
+            label_ar="نقطة الالتقاء", default="Scout hall, Achrafieh", visible_to_parents=True, order=0,
+        )  # fmt: skip
+        email = CustomField.objects.create(
+            organization=org, entity="event", key="contact_email", code="contact_email", label_en="Contact email",
+            label_ar="بريد التواصل", default="camp@cedarscouts.org", visible_to_parents=True, order=1,
+        )  # fmt: skip
+        bus = CustomField.objects.create(
+            organization=org, entity="event", key="bus_company", code="bus_company", label_en="Bus company",
+            label_ar="شركة الباصات", visible_to_parents=False, order=2,
+        )  # fmt: skip
+        if activity:
+            bus.event_types.set([activity])
+        CustomField.objects.create(
+            organization=org, entity="event", key="budget_approved", label_en="Budget approved",
+            label_ar="الموازنة معتمدة", field_type="yesno", default=False, visible_to_parents=False, order=3,
+        )  # fmt: skip
+        camp = Event.objects.filter(organization=org, title__startswith="Autumn camp").first()
+        if camp:
+            camp.custom_data = {
+                point.key: "Scout hall, Achrafieh",
+                email.key: email.default,
+                bus.key: "Nakhoul Transport",
+            }
+            camp.save(update_fields=["custom_data"])
+
     def add_arguments(self, parser):
         parser.add_argument("--reset", action="store_true", help="Delete the demo organization and its users first.")
 
@@ -713,6 +743,7 @@ class Command(BaseCommand):
 
         self.seed_events(org, units, youth, guardians, karim.membership.user)
         self.seed_inventory(org, units, youth, leaders, rania)
+        self.seed_event_fields(org)
         self.seed_finance(org, rania, karim.membership.user, leaders["joseph.a"][0].user)
 
         self.stdout.write(self.style.SUCCESS("Demo organization created."))

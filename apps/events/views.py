@@ -15,7 +15,8 @@ from rest_framework.views import APIView
 from apps.attendance.models import AttendanceRecord, AttendanceStatus
 from apps.audit.services import log_action
 from apps.core.tenancy import TenantScopedMixin, get_active_membership
-from apps.documents.views import DocumentThrottle, export_response
+from apps.customfields import services as custom_field_services
+from apps.documents.views import DocumentThrottle, export_response, values_response
 from apps.permissions.drf import HasOrgPermission, IsOrgMember, get_permission_service
 from apps.units.models import Patrol, UnitMembership
 
@@ -261,6 +262,11 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         """The event as a Word document, filled into the organization's template."""
         return export_response(request, event=self.get_object(), service=self.service, organization=self.organization)
 
+    @action(detail=True, methods=["get"], url_path="document-values")
+    def document_values(self, request, pk=None):
+        """The custom fields the chosen template uses, to check before exporting."""
+        return values_response(request, event=self.get_object(), service=self.service, organization=self.organization)
+
     # ------------------------------------------------------------ invitations
 
     def invitation_queryset(self, event):
@@ -401,7 +407,32 @@ class EventViewSet(TenantScopedMixin, viewsets.ModelViewSet):
 # ---------------------------------------------------------------- members & parents
 
 
-def my_event_payload(event: Event, invitations: list[EventInvitation], membership) -> dict:
+def family_fields(organization):
+    """Event custom fields the organization shows to families."""
+    return [f for f in custom_field_services.active_fields(organization, "event") if f.visible_to_parents]
+
+
+def family_values(event: Event, fields) -> list[dict]:
+    rows = []
+    for field in fields:
+        if not field.applies(event):
+            continue
+        value, _source = custom_field_services.value_or_default(field, event)
+        if value in custom_field_services.EMPTY:
+            continue
+        rows.append(
+            {
+                "key": field.key,
+                "label_en": field.label_en,
+                "label_ar": field.label_ar or field.label_en,
+                "value_en": custom_field_services.display(field, value, "en"),
+                "value_ar": custom_field_services.display(field, value, "ar"),
+            }
+        )
+    return rows
+
+
+def my_event_payload(event: Event, invitations: list[EventInvitation], membership, fields=None) -> dict:
     me, guardian, children = services.my_people(membership)
     people = []
     for inv in invitations:
@@ -446,6 +477,7 @@ def my_event_payload(event: Event, invitations: list[EventInvitation], membershi
         "consent_text": event.consent_text,
         "status": event.status,
         "closed": event.is_closed,
+        "custom_fields": family_values(event, family_fields(event.organization) if fields is None else fields),
         "people": people,
     }
 
@@ -466,7 +498,8 @@ class MyEventsView(APIView):
         grouped: dict[int, tuple[Event, list]] = {}
         for inv in qs[:300]:
             grouped.setdefault(inv.event_id, (inv.event, []))[1].append(inv)
-        return Response([my_event_payload(e, invs, membership) for e, invs in grouped.values()])
+        fields = family_fields(membership.organization)
+        return Response([my_event_payload(e, invs, membership, fields) for e, invs in grouped.values()])
 
 
 class MyInvitationMixin:

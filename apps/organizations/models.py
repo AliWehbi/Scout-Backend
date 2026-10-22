@@ -12,6 +12,48 @@ from apps.accounts.models import Language
 from apps.core.models import TimeStampedModel
 from apps.core.validators import hex_color_validator
 
+# Words that say nothing about which group it is, skipped when making the organization code.
+CODE_STOP_WORDS = {
+    "the",
+    "of",
+    "and",
+    "for",
+    "scout",
+    "scouts",
+    "scouting",
+    "group",
+    "groups",
+    "troop",
+    "association",
+    "club",
+    "team",
+    "unit",
+    "pack",
+    "society",
+    "organization",
+    "organisation",
+    "org",
+    "boy",
+    "girl",
+}
+
+
+def make_org_code(name: str, is_taken) -> str:
+    """
+    A short, readable, permanent code from the name: "1st Cedar Scout Group" -> "cedar" (then cedar2...).
+    It starts every custom template code ({{ event.cedar_meeting_point }}), so it must never change.
+    """
+    words = [w for w in slugify(name, allow_unicode=False).split("-") if w]
+    useful = [w for w in words if w not in CODE_STOP_WORDS and not w[0].isdigit()]
+    base = "".join(ch for ch in (useful or words or [""])[0] if ch.isalnum())[:12]
+    if not base or not base[0].isalpha():
+        base = ("org" + base)[:12]
+    code, n = base, 2
+    while is_taken(code):
+        code = f"{base}{n}"
+        n += 1
+    return code
+
 
 class Organization(TimeStampedModel):
     """A tenant: one scout group / association using the dashboard."""
@@ -19,6 +61,8 @@ class Organization(TimeStampedModel):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
     slug = models.SlugField(max_length=220, unique=True)
+    # Permanent prefix for this organization's custom template codes. Never edited.
+    code = models.CharField(max_length=20, unique=True, editable=False)
     logo = models.ImageField(upload_to="org-logos/", blank=True, null=True)
     country = models.CharField(max_length=2, blank=True, help_text=_("ISO 3166-1 alpha-2 code"))
     currency = models.CharField(max_length=3, default="USD", help_text=_("ISO 4217 code"))
@@ -33,6 +77,8 @@ class Organization(TimeStampedModel):
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = self._unique_slug()
+        if not self.code:
+            self.code = make_org_code(self.name, lambda c: Organization.objects.filter(code=c).exists())
         super().save(*args, **kwargs)
 
     def _unique_slug(self) -> str:

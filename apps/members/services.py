@@ -3,22 +3,18 @@ Business rules for members: linking logins to people, unit-scoped visibility, cu
 validation, and applying parent change requests.
 """
 
-from datetime import date
-
 from django.db import transaction
 from django.db.models import Q, QuerySet
 from django.utils import timezone
-from django.utils.dateparse import parse_date
 from django.utils.translation import gettext as _
 from rest_framework.exceptions import ValidationError
 
+from apps.customfields import services as custom_field_services
 from apps.units.models import UnitMembership, UnitPosition
 
 from .models import (
-    AppliesTo,
     ChangeRequest,
     CustomField,
-    FieldType,
     Guardian,
     MedicalInfo,
     Member,
@@ -182,72 +178,16 @@ def missing_info_flags(member: Member) -> list[str]:
 
 
 def fields_for(member: Member, organization) -> list[CustomField]:
-    return [
-        f
-        for f in CustomField.objects.filter(organization=organization, is_active=True)
-        if f.applies_to == AppliesTo.ALL or f.applies_to == member.kind
-    ]
+    return custom_field_services.fields_for(member, organization, "member")
 
 
-def clean_custom_value(field: CustomField, value):
-    """Validate and normalize one custom-field value; raises ValidationError."""
-    if value in (None, "", []):
-        return None
-    t = field.field_type
-    if t == FieldType.TEXT:
-        return str(value).strip()[:500]
-    if t == FieldType.NUMBER:
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            raise ValidationError(_("Enter a number.")) from None
-        return int(number) if number.is_integer() else number
-    if t == FieldType.DATE:
-        parsed = value if isinstance(value, date) else parse_date(str(value))
-        if parsed is None:
-            raise ValidationError(_("Enter a valid date (YYYY-MM-DD)."))
-        return parsed.isoformat()
-    if t == FieldType.YES_NO:
-        if isinstance(value, bool):
-            return value
-        text = str(value).strip().lower()
-        if text in {"yes", "true", "1", "y", "نعم"}:
-            return True
-        if text in {"no", "false", "0", "n", "لا"}:
-            return False
-        raise ValidationError(_("Choose yes or no."))
-    if t == FieldType.CHOICE:
-        if value not in field.options:
-            raise ValidationError(_("“%(value)s” is not one of the options.") % {"value": value})
-        return value
-    if t == FieldType.MULTI:
-        values = value if isinstance(value, list) else [v.strip() for v in str(value).split(",") if v.strip()]
-        bad = [v for v in values if v not in field.options]
-        if bad:
-            raise ValidationError(_("Not an option: %(list)s") % {"list": ", ".join(bad)})
-        return values
-    return value
+clean_custom_value = custom_field_services.clean_value
 
 
-def clean_custom_data(member: Member, organization, data: dict, *, partial=True) -> dict:
-    fields = {f.key: f for f in fields_for(member, organization)}
-    cleaned = dict(member.custom_data or {}) if partial else {}
-    errors = {}
-    for key, value in data.items():
-        field = fields.get(key)
-        if field is None:
-            errors[key] = [_("Unknown field.")]
-            continue
-        try:
-            cleaned[key] = clean_custom_value(field, value)
-        except ValidationError as exc:
-            errors[key] = exc.detail if isinstance(exc.detail, list) else [exc.detail]
-    for key, field in fields.items():
-        if field.required and cleaned.get(key) in (None, "", []):
-            errors.setdefault(key, [_("This field is required.")])
-    if errors:
-        raise ValidationError({"custom_data": errors})
-    return {k: v for k, v in cleaned.items() if v is not None}
+def clean_custom_data(member: Member, organization, data: dict, *, partial=True, fill_defaults=False) -> dict:
+    return custom_field_services.clean_data(
+        member, organization, "member", data, partial=partial, fill_defaults=fill_defaults
+    )
 
 
 # ---------------------------------------------------------------- change requests

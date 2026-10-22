@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     "apps.members",
     "apps.attendance",
     "apps.events",
+    "apps.customfields",
     "apps.inventory",
     "apps.finance",
     "apps.documents",

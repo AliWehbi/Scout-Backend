@@ -74,6 +74,8 @@ class Event(TenantModel):
     status = models.CharField(max_length=10, choices=EventStatus.choices, default=EventStatus.DRAFT)
     # A closed event is read-only (details, participants, replies, consent, attendance, gear).
     # Only the event's leaders can close it; the leader who closed it (or an org admin) reopens it.
+    # Values of the organization's event custom fields (apps.customfields), by field key.
+    custom_data = models.JSONField(default=dict, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
     closed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"

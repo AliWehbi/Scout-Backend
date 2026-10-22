@@ -1,6 +1,5 @@
 import re
 
-from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
@@ -13,7 +12,6 @@ from .models import (
     ChangeRequest,
     ChangeRequestItem,
     CustomField,
-    FieldType,
     Guardian,
     GuardianLink,
     MedicalInfo,
@@ -292,7 +290,11 @@ class MemberWriteSerializer(serializers.ModelSerializer):
             probe.kind = attrs["kind"]
         if "custom_data" in attrs or self.instance is None:
             attrs["custom_data"] = services.clean_custom_data(
-                probe, org, attrs.get("custom_data") or {}, partial=self.instance is not None
+                probe,
+                org,
+                attrs.get("custom_data") or {},
+                partial=self.instance is not None,
+                fill_defaults=self.instance is None,  # new members start with the fields' defaults
             )
         return attrs
 
@@ -320,58 +322,6 @@ class CertificationSerializer(serializers.ModelSerializer):
         model = Certification
         fields = ["id", "name", "issued_on", "expires_on", "reference", "notes", "created_at"]
         read_only_fields = ["id", "created_at"]
-
-
-class CustomFieldSerializer(serializers.ModelSerializer):
-    key = serializers.SlugField(max_length=60, required=False)
-
-    class Meta:
-        model = CustomField
-        fields = [
-            "id",
-            "key",
-            "label_en",
-            "label_ar",
-            "field_type",
-            "options",
-            "applies_to",
-            "section",
-            "required",
-            "visible_to_parents",
-            "editable_by_parents",
-            "order",
-            "is_active",
-        ]
-        read_only_fields = ["id"]
-
-    def validate_options(self, options):
-        if not isinstance(options, list) or any(not isinstance(o, str) or not o.strip() for o in options):
-            raise serializers.ValidationError(_("Options must be a list of text values."))
-        cleaned = [o.strip() for o in options]
-        if len(cleaned) != len(set(cleaned)):
-            raise serializers.ValidationError(_("Options must be unique."))
-        return cleaned
-
-    def validate(self, attrs):
-        org = self.context["organization"]
-        field_type = attrs.get("field_type", getattr(self.instance, "field_type", FieldType.TEXT))
-        options = attrs.get("options", getattr(self.instance, "options", []))
-        if field_type in (FieldType.CHOICE, FieldType.MULTI) and not options:
-            raise serializers.ValidationError({"options": _("Add at least one option.")})
-        if self.instance is None:
-            key = attrs.get("key") or slugify(attrs.get("label_en", ""))[:50].replace("-", "_") or "field"
-            base, n = key, 2
-            while CustomField.objects.filter(organization=org, key=key).exists():
-                key = f"{base}_{n}"
-                n += 1
-            attrs["key"] = key
-        else:
-            attrs.pop("key", None)  # keys are stable once created
-        if attrs.get("editable_by_parents") and not attrs.get(
-            "visible_to_parents", getattr(self.instance, "visible_to_parents", True)
-        ):
-            raise serializers.ValidationError({"editable_by_parents": _("Parents must be able to see the field.")})
-        return attrs
 
 
 # ---------------------------------------------------------------- change requests
@@ -470,7 +420,7 @@ def clean_requested_change(member: Member, organization, field: str, value):
         return [dict(x) for x in cleaned] if isinstance(cleaned, list) else cleaned
     if field.startswith("custom."):
         key = field.split(".", 1)[1]
-        cf = CustomField.objects.get(organization=organization, key=key)
+        cf = CustomField.objects.get(organization=organization, entity="member", key=key)
         return services.clean_custom_value(cf, value)
     raise serializers.ValidationError(_("This field can't be changed."))
 

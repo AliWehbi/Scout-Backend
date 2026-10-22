@@ -1,3 +1,5 @@
+import json
+
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
@@ -45,7 +47,7 @@ class DocumentTemplateSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         upload = attrs.get("file")
         if upload is not None:
-            attrs["data"] = services.read_upload(upload, attrs["kind"])
+            attrs["data"] = services.read_upload(upload, attrs["kind"], self.context.get("organization"))
             attrs["original_filename"] = services.clean_filename(upload.name, limit=255)
         return attrs
 
@@ -84,6 +86,24 @@ class ExportParamsSerializer(serializers.Serializer):
     template = serializers.IntegerField(required=False, allow_null=True, min_value=1)
     lang = serializers.ChoiceField(choices=registry.LANGS, required=False)
     date = serializers.DateField(required=False, allow_null=True)
+    # Values for this document only, as JSON: {"<field code>": value}. The event keeps its own.
+    values = serializers.CharField(required=False, allow_blank=True, max_length=20000)
+
+    def validate_values(self, raw):
+        if not raw:
+            return {}
+        try:
+            values = json.loads(raw)
+        except ValueError:
+            raise serializers.ValidationError(_("Send the values as a JSON object.")) from None
+        if not isinstance(values, dict):
+            raise serializers.ValidationError(_("Send the values as a JSON object."))
+        return values
+
+
+class ValuesParamsSerializer(serializers.Serializer):
+    kind = serializers.ChoiceField(choices=DocumentKind.choices)
+    template = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
 
 class StarterParamsSerializer(serializers.Serializer):

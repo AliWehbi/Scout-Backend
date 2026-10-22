@@ -36,6 +36,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "slug",
+            "code",
             "logo",
             "country",
             "currency",
@@ -44,7 +45,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "fiscal_year_start_month",
             "created_at",
         ]
-        read_only_fields = ["id", "slug", "created_at"]
+        read_only_fields = ["id", "slug", "code", "created_at"]
 
     def validate_fiscal_year_start_month(self, value):
         if not 1 <= value <= 12:

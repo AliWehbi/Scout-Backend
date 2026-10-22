@@ -252,7 +252,7 @@ def catalog(organization, service) -> dict:
     """Every field this user may export: key -> (English, Arabic, section, value function)."""
     medical = service.has_perm_anywhere("members.view_medical")
     fields = {k: v for k, v in BUILT_IN.items() if medical or v[2] != "medical"}
-    for f in CustomField.objects.filter(organization=organization, is_active=True).order_by("order", "id"):
+    for f in CustomField.objects.for_entity(organization, "member").filter(is_active=True).order_by("order", "id"):
         if f.section == FieldSection.MEDICAL and not medical:
             continue
         section = "medical" if f.section == FieldSection.MEDICAL else "custom"

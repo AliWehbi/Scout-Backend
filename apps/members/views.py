@@ -19,10 +19,11 @@ from apps.accounts.serializers import validate_email_value, validate_username_va
 from apps.attendance.models import AttendanceRecord
 from apps.audit.services import log_action
 from apps.core.tenancy import TenantScopedMixin, get_active_membership
+from apps.customfields.serializers import CustomFieldSerializer
 from apps.organizations.models import MembershipStatus, OrgMembership
 from apps.organizations.serializers import InvitationSerializer
 from apps.organizations.services import create_invitation, generate_username
-from apps.permissions.drf import HasOrgPermission, IsOrgMember, get_permission_service
+from apps.permissions.drf import IsOrgMember, get_permission_service
 from apps.units.models import Unit, UnitMembership
 from apps.units.serializers import UnitMembershipSerializer, UnitMembershipWriteSerializer
 
@@ -46,7 +47,6 @@ from .serializers import (
     CertificationSerializer,
     ChangeRequestCreateSerializer,
     ChangeRequestSerializer,
-    CustomFieldSerializer,
     GiveAccessSerializer,
     GuardianLinkSerializer,
     GuardianLinkWriteSerializer,
@@ -120,7 +120,7 @@ def sort_members(qs, param: str, organization):
         keys = MEMBER_SORTS[column]()
     elif (
         column.startswith("custom__")
-        and CustomField.objects.filter(organization=organization, key=column.removeprefix("custom__")).exists()
+        and CustomField.objects.for_entity(organization, "member").filter(key=column.removeprefix("custom__")).exists()
     ):
         keys = [F(f"custom_data__{column.removeprefix('custom__')}")]
     else:
@@ -603,45 +603,6 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         return response
 
 
-class CustomFieldViewSet(TenantScopedMixin, viewsets.ModelViewSet):
-    serializer_class = CustomFieldSerializer
-    permission_classes = [permissions.IsAuthenticated, HasOrgPermission]
-    permission_map = {
-        "create": "settings.manage",
-        "update": "settings.manage",
-        "partial_update": "settings.manage",
-        "destroy": "settings.manage",
-        "reorder": "settings.manage",
-    }
-    pagination_class = None
-
-    def get_queryset(self):
-        return CustomField.objects.filter(organization=self.organization).order_by("order", "id")
-
-    def perform_create(self, serializer):
-        last = self.get_queryset().order_by("-order").first()
-        field = serializer.save(organization=self.organization, order=(last.order + 1) if last else 0)
-        log_action(self.request, "custom_field.created", organization=self.organization, target=field)
-
-    def perform_update(self, serializer):
-        field = serializer.save()
-        log_action(self.request, "custom_field.updated", organization=self.organization, target=field)
-
-    def perform_destroy(self, instance):
-        log_action(self.request, "custom_field.deleted", organization=self.organization, target=instance)
-        instance.delete()
-
-    @action(detail=False, methods=["post"])
-    def reorder(self, request):
-        ids = request.data.get("ids", [])
-        fields = {f.pk: f for f in self.get_queryset()}
-        for index, field_id in enumerate(ids):
-            if field_id in fields:
-                fields[field_id].order = index
-                fields[field_id].save(update_fields=["order"])
-        return Response(CustomFieldSerializer(self.get_queryset(), many=True).data)
-
-
 # ---------------------------------------------------------------- approvals (leaders)
 
 
@@ -748,7 +709,7 @@ def child_payload(member: Member, organization, guardian: Guardian) -> dict:
         "leaders": sorted({lm.member.full_name for lm in leaders}),
         "attendance": attendance_summary(member, 10),
         "medical": MedicalSerializer(medical).data if medical else None,
-        "custom_fields": CustomFieldSerializer(fields, many=True).data,
+        "custom_fields": CustomFieldSerializer(fields, many=True, context={"organization": organization}).data,
         "custom_data": {f.key: (member.custom_data or {}).get(f.key) for f in fields},
         "editable_fields": sorted(services.parent_editable_fields(member, organization)),
         "pending_requests": sum(1 for r in member.change_requests.all() if r.status == RequestStatus.PENDING),

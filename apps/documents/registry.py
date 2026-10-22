@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 
 from django.utils import formats, timezone, translation
 
+from apps.customfields import services as custom_field_services
+from apps.customfields.models import CustomField
 from apps.events import services as event_services
 from apps.events.models import Event
 from apps.members.models import GuardianLink
@@ -200,8 +202,31 @@ KIND_FIELDS = {
 }
 
 
-def fields_for(kind: str) -> list[dict]:
-    return COMMON_FIELDS + KIND_FIELDS[kind]
+def coded_event_fields(organization) -> list[CustomField]:
+    """The organization's active event fields that have a template code."""
+    if organization is None:
+        return []
+    return [f for f in custom_field_services.active_fields(organization, "event") if f.code]
+
+
+def custom_items(organization) -> list[dict]:
+    """The organization's own placeholders, e.g. event.cedar_meeting_point."""
+    items = []
+    for field in coded_event_fields(organization):
+        items.append(
+            {
+                "name": f"event.{field.placeholder(organization.code)}",
+                "en": field.label_en,
+                "ar": field.label_ar or field.label_en,
+                "custom": True,
+                "event_types": [{"en": t.name_en, "ar": t.name_ar or t.name_en} for t in field.event_types.all()],
+            }
+        )
+    return items
+
+
+def fields_for(kind: str, organization=None) -> list[dict]:
+    return custom_items(organization) + COMMON_FIELDS + KIND_FIELDS[kind]
 
 
 def allowed_roots(kind: str) -> frozenset[str]:
@@ -380,8 +405,27 @@ def _consent_slips(event: Event, lang: str) -> dict:
     return {"slips": slips}
 
 
-def build_context(kind: str, event: Event, *, lang: str, user, day: date | None = None) -> dict:
+def custom_values(event: Event, lang: str, overrides: dict | None = None) -> dict:
+    """
+    {placeholder: text} for the organization's coded event fields: the value given for this
+    document, else the event's value, else the field's default.
+    """
+    org = event.organization
+    out = {}
+    for field in coded_event_fields(org):
+        if overrides and field.code in overrides:
+            value = overrides[field.code]
+        else:
+            value, _source = custom_field_services.value_or_default(field, event)
+        out[field.placeholder(org.code)] = custom_field_services.display(field, value, lang)
+    return out
+
+
+def build_context(
+    kind: str, event: Event, *, lang: str, user, day: date | None = None, overrides: dict | None = None
+) -> dict:
     context = _common(event, lang=lang, user=user)
+    context["event"].update(custom_values(event, lang, overrides))
     if kind == DocumentKind.EVENT_SHEET:
         context.update(_event_sheet(event, lang))
     elif kind == DocumentKind.ATTENDANCE_SHEET:
@@ -394,7 +438,7 @@ def build_context(kind: str, event: Event, *, lang: str, user, day: date | None 
 # ------------------------------------------------------------------ sample data
 
 
-def sample_context(kind: str, lang: str = "en") -> dict:
+def sample_context(kind: str, lang: str = "en", organization=None) -> dict:
     """Made-up data in the shape of `build_context`, to test-render an uploaded template."""
     ar = lang == "ar"
     people = [("Jad Haddad", "جاد حداد"), ("Lea Khoury", "ليا خوري"), ("Omar Saleh", "عمر صالح")]
@@ -430,6 +474,9 @@ def sample_context(kind: str, lang: str = "en") -> dict:
         "generated_at": fmt_date(date(2030, 10, 1), lang) + " 09:30",
         "generated_by": "Rania Aoun",
     }
+    for field in coded_event_fields(organization):
+        sample = custom_field_services.display(field, field.default, lang) or (field.label_ar if ar else field.label_en)
+        context["event"][field.placeholder(organization.code)] = sample or field.label_en
     if kind == DocumentKind.EVENT_SHEET:
         context["participants"] = [
             {

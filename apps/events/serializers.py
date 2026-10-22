@@ -2,6 +2,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from apps.attendance.serializers import RecordWriteSerializer
+from apps.customfields import services as custom_field_services
 from apps.members.models import Member
 from apps.units.models import Unit
 
@@ -86,6 +87,7 @@ class EventSerializer(serializers.ModelSerializer):
             "cost",
             "requires_consent",
             "consent_text",
+            "custom_data",
             "status",
             "closed_at",
             "series",
@@ -148,6 +150,17 @@ class EventSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"capacity": _("Must be at least 1.")})
         if self.instance is not None and attrs.get("repeat_until"):
             raise serializers.ValidationError({"repeat_until": _("Repeat can only be set when creating.")})
+        if self.instance is None or "custom_data" in attrs or "event_type" in attrs:
+            # The organization's event fields that apply to this event's type (apps.customfields).
+            probe = Event(event_type=get("event_type"), custom_data=getattr(self.instance, "custom_data", None) or {})
+            attrs["custom_data"] = custom_field_services.clean_data(
+                probe,
+                self._org(),
+                "event",
+                attrs.get("custom_data") or {},
+                partial=self.instance is not None,
+                fill_defaults=self.instance is None,
+            )
         return attrs
 
 

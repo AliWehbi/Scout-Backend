@@ -296,6 +296,14 @@ class Importer:
         ]
 
     @transaction.atomic
+    def defaults_for(self, kind: str) -> dict:
+        """New members start with the defaults of the fields that apply to them."""
+        return {
+            f.key: f.default
+            for f in self.custom_fields.values()
+            if f.default not in (None, "", []) and f.applies_to in ("all", kind)
+        }
+
     def commit(self, decisions: dict, actor) -> dict:
         created = updated = skipped = 0
         guardians_by_phone = {g.phone: g for g in Guardian.objects.filter(organization=self.org).exclude(phone="")}
@@ -345,7 +353,7 @@ class Importer:
                     },
                     gender=cleaned.get("gender", ""),
                     kind=cleaned["kind"],
-                    custom_data=cleaned["custom_data"],
+                    custom_data={**self.defaults_for(cleaned["kind"]), **cleaned["custom_data"]},
                 )
                 created += 1
             if cleaned.get("unit"):
@@ -385,7 +393,7 @@ class Importer:
 
 
 def organization_custom_fields(organization):
-    return CustomField.objects.filter(organization=organization, is_active=True)
+    return CustomField.objects.for_entity(organization, "member").filter(is_active=True)
 
 
 def parse_json_field(raw, name):

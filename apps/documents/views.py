@@ -12,11 +12,17 @@ from rest_framework.throttling import UserRateThrottle
 
 from apps.audit.services import log_action
 from apps.core.tenancy import TenantScopedMixin
+from apps.customfields import services as custom_field_services
 from apps.permissions.drf import HasOrgPermission
 
 from . import registry, services
 from .models import DocumentKind, DocumentTemplate
-from .serializers import DocumentTemplateSerializer, ExportParamsSerializer, StarterParamsSerializer
+from .serializers import (
+    DocumentTemplateSerializer,
+    ExportParamsSerializer,
+    StarterParamsSerializer,
+    ValuesParamsSerializer,
+)
 
 
 class DocumentThrottle(UserRateThrottle):
@@ -87,7 +93,7 @@ class DocumentTemplateViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     def fields(self, request):
         return Response(
             [
-                {"kind": kind, "label": label, "fields": registry.fields_for(kind)}
+                {"kind": kind, "label": label, "fields": registry.fields_for(kind, self.organization)}
                 for kind, label in DocumentKind.choices
             ]
         )
@@ -100,6 +106,69 @@ class DocumentTemplateViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         return docx_response(services.starter_bytes(kind, lang), f"{kind}.{lang}.docx")
 
 
+def _pick_template(data, organization, kind) -> DocumentTemplate | None:
+    if data.get("template"):
+        return get_object_or_404(DocumentTemplate, organization=organization, kind=kind, pk=data["template"])
+    if "template" in data:  # explicitly null: the built-in template
+        return None
+    return services.default_template(organization, kind)
+
+
+def _clean_overrides(raw: dict, organization) -> dict:
+    """Per-document values, by field code, checked like the event's own values."""
+    fields = {f.code: f for f in registry.coded_event_fields(organization)}
+    cleaned, errors = {}, {}
+    for code, value in raw.items():
+        field = fields.get(code)
+        if field is None:
+            errors[code] = [_("Unknown field.")]
+            continue
+        try:
+            cleaned[code] = custom_field_services.clean_value(field, value)
+        except ValidationError as exc:
+            errors[code] = exc.detail if isinstance(exc.detail, list) else [exc.detail]
+    if errors:
+        raise ValidationError({"values": errors})
+    return cleaned
+
+
+def values_response(request, *, event, service, organization):
+    """
+    `GET /events/{id}/document-values/`: the organization's custom fields used by the chosen
+    template, with the event's value (or the default) to check before exporting.
+    """
+    params = ValuesParamsSerializer(data=request.query_params)
+    params.is_valid(raise_exception=True)
+    data = params.validated_data
+    kind = data["kind"]
+    if kind not in services.allowed_kinds(service, event):
+        raise PermissionDenied(_("You can't export this document for this event."))
+    template = _pick_template(data, organization, kind)
+    if template is None:
+        return Response([])  # the built-in templates only use the app's own fields
+    used = services.used_custom_codes(services.stored_bytes(template), organization.code)
+    rows = []
+    for field in registry.coded_event_fields(organization):
+        if field.code not in used:
+            continue
+        value, source = custom_field_services.value_or_default(field, event)
+        rows.append(
+            {
+                "code": field.code,
+                "template_code": field.template_code(organization.code),
+                "label_en": field.label_en,
+                "label_ar": field.label_ar,
+                "field_type": field.field_type,
+                "options": field.options,
+                "value": value,
+                "source": source,
+                "event_value": (event.custom_data or {}).get(field.key),
+                "default": field.default,
+            }
+        )
+    return Response(rows)
+
+
 def export_response(request, *, event, service, organization):
     """`GET /events/{id}/export/`: the event filled into a Word template."""
     params = ExportParamsSerializer(data=request.query_params)
@@ -108,24 +177,26 @@ def export_response(request, *, event, service, organization):
     kind = data["kind"]
     if kind not in services.allowed_kinds(service, event):
         raise PermissionDenied(_("You can't export this document for this event."))
+    overrides = _clean_overrides(data.get("values") or {}, organization)
     lang = data.get("lang") or (request.LANGUAGE_CODE if request.LANGUAGE_CODE in registry.LANGS else "en")
     day = data.get("date")
     if kind == DocumentKind.ATTENDANCE_SHEET and day is not None and day not in event.days:
         raise ValidationError({"date": [_("This day isn't part of the event.")]})
 
-    if data.get("template"):
-        template = get_object_or_404(DocumentTemplate, organization=organization, kind=kind, pk=data["template"])
-    elif "template" in data:  # explicitly null: the built-in template
-        template = None
-    else:
-        template = services.default_template(organization, kind)
-
-    document = services.export_event(event, kind=kind, template=template, lang=lang, user=request.user, day=day)
+    template = _pick_template(data, organization, kind)
+    document = services.export_event(
+        event, kind=kind, template=template, lang=lang, user=request.user, day=day, overrides=overrides
+    )
     log_action(
         request,
         "event.exported",
         organization=organization,
         target=event,
-        changes={"kind": kind, "template": template.pk if template else None, "lang": lang},
+        changes={
+            "kind": kind,
+            "template": template.pk if template else None,
+            "lang": lang,
+            "edited_values": sorted(overrides),
+        },
     )
     return docx_response(document, services.export_filename(event, kind, lang, day))
