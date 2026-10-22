@@ -202,27 +202,46 @@ KIND_FIELDS = {
 }
 
 
-def coded_event_fields(organization) -> list[CustomField]:
-    """The organization's active event fields that have a template code."""
+# Custom fields that go into the event documents: the event's own and the organization's.
+DOCUMENT_ENTITIES = ("event", "organization")
+
+
+def coded_fields(organization, entities=DOCUMENT_ENTITIES) -> list[CustomField]:
+    """The organization's active custom fields with a template code, for these kinds of record."""
     if organization is None:
         return []
-    return [f for f in custom_field_services.active_fields(organization, "event") if f.code]
+    fields = []
+    for entity in entities:
+        fields += [f for f in custom_field_services.active_fields(organization, entity) if f.code]
+    return fields
+
+
+def coded_event_fields(organization) -> list[CustomField]:
+    return coded_fields(organization, ("event",))
 
 
 def custom_items(organization) -> list[dict]:
-    """The organization's own placeholders, e.g. event.cedar_meeting_point."""
+    """The organization's own placeholders, e.g. event.cedar_meeting_point or org.cedar_phone."""
     items = []
-    for field in coded_event_fields(organization):
+    for field in coded_fields(organization):
         items.append(
             {
-                "name": f"event.{field.placeholder(organization.code)}",
+                "name": field.template_code(organization.code),
                 "en": field.label_en,
                 "ar": field.label_ar or field.label_en,
                 "custom": True,
+                "entity": field.entity,
                 "event_types": [{"en": t.name_en, "ar": t.name_ar or t.name_en} for t in field.event_types.all()],
             }
         )
     return items
+
+
+def field_value(field: CustomField, event: Event):
+    """(value, source) of a coded field for this event's documents."""
+    if field.entity == "organization":
+        return field.default, ("organization" if field.default not in custom_field_services.EMPTY else "empty")
+    return custom_field_services.value_or_default(field, event)
 
 
 def fields_for(kind: str, organization=None) -> list[dict]:
@@ -405,19 +424,20 @@ def _consent_slips(event: Event, lang: str) -> dict:
     return {"slips": slips}
 
 
-def custom_values(event: Event, lang: str, overrides: dict | None = None) -> dict:
+def custom_values(event: Event, lang: str, overrides: dict | None = None) -> dict[str, dict]:
     """
-    {placeholder: text} for the organization's coded event fields: the value given for this
-    document, else the event's value, else the field's default.
+    {"event": {placeholder: text}, "org": {...}} for the organization's coded fields: the value
+    given for this document (by template code), else the stored value, else the default.
     """
     org = event.organization
-    out = {}
-    for field in coded_event_fields(org):
-        if overrides and field.code in overrides:
-            value = overrides[field.code]
+    out: dict[str, dict] = {"event": {}, "org": {}}
+    for field in coded_fields(org):
+        code = field.template_code(org.code)
+        if overrides and code in overrides:
+            value = overrides[code]
         else:
-            value, _source = custom_field_services.value_or_default(field, event)
-        out[field.placeholder(org.code)] = custom_field_services.display(field, value, lang)
+            value, _source = field_value(field, event)
+        out[field.spec.code_root][field.placeholder(org.code)] = custom_field_services.display(field, value, lang)
     return out
 
 
@@ -425,7 +445,9 @@ def build_context(
     kind: str, event: Event, *, lang: str, user, day: date | None = None, overrides: dict | None = None
 ) -> dict:
     context = _common(event, lang=lang, user=user)
-    context["event"].update(custom_values(event, lang, overrides))
+    values = custom_values(event, lang, overrides)
+    context["event"].update(values["event"])
+    context["org"].update(values["org"])
     if kind == DocumentKind.EVENT_SHEET:
         context.update(_event_sheet(event, lang))
     elif kind == DocumentKind.ATTENDANCE_SHEET:
@@ -474,9 +496,9 @@ def sample_context(kind: str, lang: str = "en", organization=None) -> dict:
         "generated_at": fmt_date(date(2030, 10, 1), lang) + " 09:30",
         "generated_by": "Rania Aoun",
     }
-    for field in coded_event_fields(organization):
+    for field in coded_fields(organization):
         sample = custom_field_services.display(field, field.default, lang) or (field.label_ar if ar else field.label_en)
-        context["event"][field.placeholder(organization.code)] = sample or field.label_en
+        context[field.spec.code_root][field.placeholder(organization.code)] = sample or field.label_en
     if kind == DocumentKind.EVENT_SHEET:
         context["participants"] = [
             {

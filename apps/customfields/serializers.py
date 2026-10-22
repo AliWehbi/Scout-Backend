@@ -107,6 +107,9 @@ class CustomFieldSerializer(serializers.ModelSerializer):
             )
             if instance is None and "visible_to_parents" not in self.initial_data:
                 attrs["visible_to_parents"] = False  # event fields are hidden from families unless switched on
+        if entity.scope == "all":
+            # Organization fields: one value (kept in `default`), nothing to require or show families.
+            attrs["required"], attrs["visible_to_parents"] = False, False
 
         if instance is None:
             key = attrs.get("key") or slugify(attrs.get("label_en", ""))[:50].replace("-", "_") or "field"

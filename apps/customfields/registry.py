@@ -30,6 +30,9 @@ class Entity:
 # Member documents are coming: member fields already take codes ({{ member.cedar_school }}).
 MEMBER = Entity("member", "Members", "الأعضاء", code_root="member", scope="member_kind", in_documents=False)
 EVENT = Entity("event", "Events", "الأنشطة", code_root="event", scope="event_types", in_documents=True)
+# Organization-wide fields (contact details, address...): one value each, usable in every document.
+# Their value is the field's `default`, since an organization has only one.
+ORGANIZATION = Entity("organization", "Organization", "المنظمة", code_root="org", scope="all", in_documents=True)
 
-ENTITIES: dict[str, Entity] = {e.key: e for e in (MEMBER, EVENT)}
+ENTITIES: dict[str, Entity] = {e.key: e for e in (MEMBER, EVENT, ORGANIZATION)}
 ENTITY_CHOICES = [(e.key, e.label_en) for e in ENTITIES.values()]

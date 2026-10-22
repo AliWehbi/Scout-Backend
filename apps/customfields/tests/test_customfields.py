@@ -212,13 +212,13 @@ def test_documents_use_custom_codes(setup):
     assert rania.get(f"{url}document-values/?kind=event_sheet&template=").data == []
 
     # Values edited for this document go into the file only; the event keeps its own.
-    values = json.dumps({"bus": "Nakhoul Transport"})
+    values = json.dumps({f"{prefix}bus": "Nakhoul Transport"})
     res = rania.get(f"{url}export/", {"kind": "event_sheet", "template": template, "lang": "en", "values": values})
     assert res.status_code == 200
     text = text_of(b"".join(res.streaming_content))
     assert "Meet at Achrafieh hall" in text and "Bus: Nakhoul Transport" in text
     assert "bus" not in Event.objects.get(pk=event["id"]).custom_data
-    bad_values = json.dumps({"budget_ok": "perhaps"})
+    bad_values = json.dumps({f"{prefix}budget_ok": "perhaps"})
     res = rania.get(f"{url}export/", {"kind": "event_sheet", "template": template, "values": bad_values})
     assert res.status_code == 400
 
@@ -252,3 +252,42 @@ def test_member_fields_take_codes_and_defaults(setup):
     rania.patch(f"/api/v1/members/{member.pk}/", {"custom_data": {key: "Other school"}}, format="json")
     member.refresh_from_db()
     assert member.custom_data == {key: "Other school"}
+
+
+def test_organization_fields_in_every_document(setup):
+    rania, org = setup["rania"], setup["org"]
+    res = rania.post(
+        FIELDS,
+        {"entity": "organization", "label_en": "Phone", "code": "phone", "default": "+961 1 234 567",
+         "required": True, "visible_to_parents": True, "event_types": [setup["types"]["Meeting"].pk]},
+        format="json",
+    )  # fmt: skip
+    assert res.status_code == 201, res.data
+    # One value for the organization (kept as the default); nothing to require, scope or show families.
+    assert res.data["template_code"] == f"org.{org.code}_phone"
+    assert (res.data["required"], res.data["visible_to_parents"], res.data["event_types"]) == (False, False, [])
+    # The same name can be an event field too: codes live under their own root.
+    add_field(rania, label_en="Phone on site", code="phone")
+
+    # Usable in every kind of document.
+    for kind in rania.get(f"{TEMPLATES}fields/").data:
+        names = [f["name"] for f in kind["fields"] if f.get("custom")]
+        assert f"org.{org.code}_phone" in names and f"event.{org.code}_phone" in names
+
+    doc = make_docx("Call {{ org." + org.code + "_phone }}", "On site {{ event." + org.code + "_phone }}")
+    res = rania.post(TEMPLATES, {"kind": "consent_slips", "name": "Slips", "file": SimpleUploadedFile("s.docx", doc)})
+    assert res.status_code == 201, res.data
+    template = res.data["id"]
+    event = rania.post(EVENTS, event_body(setup), format="json").data
+    url = f"{EVENTS}{event['id']}/"
+    rows = rania.get(f"{url}document-values/?kind=consent_slips&template={template}").data
+    assert [(r["template_code"], r["value"], r["source"]) for r in rows] == [
+        (f"event.{org.code}_phone", None, "empty"),
+        (f"org.{org.code}_phone", "+961 1 234 567", "organization"),
+    ]
+    # Edited for one document: the organization keeps its value.
+    values = json.dumps({f"org.{org.code}_phone": "+961 3 000 000"})
+    res = rania.get(f"{url}export/", {"kind": "consent_slips", "template": template, "lang": "en", "values": values})
+    assert res.status_code == 200
+    assert "Call +961 3 000 000" in text_of(b"".join(res.streaming_content))
+    assert CustomField.objects.get(entity="organization").default == "+961 1 234 567"

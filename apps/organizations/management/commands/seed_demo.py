@@ -497,6 +497,15 @@ class Command(BaseCommand):
             organization=org, entity="event", key="budget_approved", label_en="Budget approved",
             label_ar="الموازنة معتمدة", field_type="yesno", default=False, visible_to_parents=False, order=3,
         )  # fmt: skip
+        # Organization-wide fields: one value each, usable in every document.
+        CustomField.objects.create(
+            organization=org, entity="organization", key="phone", code="phone", label_en="Phone",
+            label_ar="الهاتف", default="+961 1 234 567", visible_to_parents=False, order=0,
+        )  # fmt: skip
+        CustomField.objects.create(
+            organization=org, entity="organization", key="address", code="address", label_en="Address",
+            label_ar="العنوان", default="Scout hall, Achrafieh, Beirut", visible_to_parents=False, order=1,
+        )  # fmt: skip
         camp = Event.objects.filter(organization=org, title__startswith="Autumn camp").first()
         if camp:
             camp.custom_data = {

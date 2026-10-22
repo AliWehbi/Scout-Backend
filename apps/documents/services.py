@@ -176,14 +176,14 @@ _TAG_RE = re.compile(rb"<[^>]+>")
 
 def used_custom_codes(data: bytes, org_code: str) -> set[str]:
     """
-    The custom field codes a template uses ({{ event.<org code>_<code> }}). Word often splits a
-    placeholder across several runs, so the XML tags are removed before searching the text.
+    The custom template codes a template uses, e.g. {"event.cedar_bus", "org.cedar_phone"}. Word often
+    splits a placeholder across several runs, so the XML tags are removed before searching the text.
     """
-    pattern = re.compile(rb"event\.\s*" + re.escape(org_code.encode()) + rb"_([a-z][a-z0-9_]*)")
+    pattern = re.compile(rb"\b(event|org)\.\s*(" + re.escape(org_code.encode()) + rb"_[a-z][a-z0-9_]*)")
     found: set[str] = set()
     with zipfile.ZipFile(BytesIO(data)) as zf:
         for info in zf.infolist():
             if info.filename.startswith("word/") and info.filename.endswith(".xml") and info.file_size < 20_000_000:
                 text = _TAG_RE.sub(b"", zf.read(info))
-                found.update(m.decode() for m in pattern.findall(text))
+                found.update(f"{root.decode()}.{name.decode()}" for root, name in pattern.findall(text))
     return found

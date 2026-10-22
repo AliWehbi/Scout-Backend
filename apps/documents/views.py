@@ -115,8 +115,8 @@ def _pick_template(data, organization, kind) -> DocumentTemplate | None:
 
 
 def _clean_overrides(raw: dict, organization) -> dict:
-    """Per-document values, by field code, checked like the event's own values."""
-    fields = {f.code: f for f in registry.coded_event_fields(organization)}
+    """Per-document values, by template code (event.cedar_bus, org.cedar_phone), checked like stored values."""
+    fields = {f.template_code(organization.code): f for f in registry.coded_fields(organization)}
     cleaned, errors = {}, {}
     for code, value in raw.items():
         field = fields.get(code)
@@ -148,21 +148,23 @@ def values_response(request, *, event, service, organization):
         return Response([])  # the built-in templates only use the app's own fields
     used = services.used_custom_codes(services.stored_bytes(template), organization.code)
     rows = []
-    for field in registry.coded_event_fields(organization):
-        if field.code not in used:
+    for field in registry.coded_fields(organization):
+        template_code = field.template_code(organization.code)
+        if template_code not in used:
             continue
-        value, source = custom_field_services.value_or_default(field, event)
+        value, source = registry.field_value(field, event)
         rows.append(
             {
                 "code": field.code,
-                "template_code": field.template_code(organization.code),
+                "entity": field.entity,
+                "template_code": template_code,
                 "label_en": field.label_en,
                 "label_ar": field.label_ar,
                 "field_type": field.field_type,
                 "options": field.options,
                 "value": value,
                 "source": source,
-                "event_value": (event.custom_data or {}).get(field.key),
+                "event_value": (event.custom_data or {}).get(field.key) if field.entity == "event" else None,
                 "default": field.default,
             }
         )
