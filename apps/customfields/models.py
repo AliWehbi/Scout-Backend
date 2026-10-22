@@ -50,8 +50,12 @@ class CustomField(TenantModel):
     label_en = models.CharField(max_length=120)
     label_ar = models.CharField(max_length=120, blank=True)
     field_type = models.CharField(max_length=10, choices=FieldType.choices, default=FieldType.TEXT)
+    # Choice fields: the stored values. `option_labels` gives each its English and Arabic label,
+    # {"<value>": {"en": "...", "ar": "..."}}, used in the matching language.
     options = models.JSONField(default=list, blank=True)
+    option_labels = models.JSONField(default=dict, blank=True)
     # Pre-filled on new records and used by documents when a record has no value.
+    # Text values (here and in records) are {"en": "...", "ar": "..."}; either may be missing.
     default = models.JSONField(null=True, blank=True)
     applies_to = models.CharField(max_length=10, choices=AppliesTo.choices, default=AppliesTo.ALL)
     # Event fields: the event types they apply to; none = every event.

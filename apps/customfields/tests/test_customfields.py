@@ -129,7 +129,7 @@ def test_event_values(setup):
     # New events start with the defaults; a required field only matters for its event types.
     res = rania.post(EVENTS, event_body(setup), format="json")
     assert res.status_code == 201, res.data
-    assert res.data["custom_data"] == {everyone["key"]: "camp@cedar.org"}
+    assert res.data["custom_data"] == {everyone["key"]: {"en": "camp@cedar.org"}}
     event_id = res.data["id"]
 
     assert rania.post(EVENTS, event_body(setup, event_type=types["Meeting"].pk), format="json").status_code == 400
@@ -138,7 +138,7 @@ def test_event_values(setup):
         event_body(setup, event_type=types["Meeting"].pk, custom_data={camp_only["key"]: "Nakhoul"}),
         format="json",
     )
-    assert camp.status_code == 201 and camp.data["custom_data"][camp_only["key"]] == "Nakhoul"
+    assert camp.status_code == 201 and camp.data["custom_data"][camp_only["key"]] == {"en": "Nakhoul"}
 
     # Values are checked; unknown or non-applying fields are refused; edits keep the other values.
     url = f"{EVENTS}{event_id}/"
@@ -146,7 +146,7 @@ def test_event_values(setup):
     assert rania.patch(url, {"custom_data": {camp_only["key"]: "x"}}, format="json").status_code == 400
     assert rania.patch(url, {"custom_data": {"nope": "x"}}, format="json").status_code == 400
     res = rania.patch(url, {"custom_data": {yes_no["key"]: "yes"}}, format="json")
-    assert res.data["custom_data"] == {everyone["key"]: "camp@cedar.org", yes_no["key"]: True}
+    assert res.data["custom_data"] == {everyone["key"]: {"en": "camp@cedar.org"}, yes_no["key"]: True}
     # Switching to a type with a required field needs its value.
     assert rania.patch(url, {"event_type": types["Meeting"].pk}, format="json").status_code == 400
 
@@ -205,7 +205,7 @@ def test_documents_use_custom_codes(setup):
     # Before exporting: the fields this template uses, with where each value comes from.
     rows = rania.get(f"{url}document-values/?kind=event_sheet&template={template}").data
     assert [(r["code"], r["value"], r["source"]) for r in rows] == [
-        ("meeting_point", "Achrafieh hall", "record"),
+        ("meeting_point", {"en": "Achrafieh hall"}, "record"),
         ("bus", None, "empty"),
     ]
     # The built-in templates don't use custom codes, so there's nothing to check.
@@ -244,14 +244,14 @@ def test_member_fields_take_codes_and_defaults(setup):
     key = res.data["key"]
     youth = rania.post("/api/v1/members/", {"first_name": "Jad", "kind": "youth"}, format="json")
     assert youth.status_code == 201, youth.data
-    assert Member.objects.get(pk=youth.data["id"]).custom_data == {key: "Cedar High"}
+    assert Member.objects.get(pk=youth.data["id"]).custom_data == {key: {"en": "Cedar High"}}
     adult = rania.post("/api/v1/members/", {"first_name": "Karim", "kind": "adult"}, format="json")
     assert Member.objects.get(pk=adult.data["id"]).custom_data == {}
     # Existing members keep what they have.
     member = Member.objects.get(pk=youth.data["id"])
     rania.patch(f"/api/v1/members/{member.pk}/", {"custom_data": {key: "Other school"}}, format="json")
     member.refresh_from_db()
-    assert member.custom_data == {key: "Other school"}
+    assert member.custom_data == {key: {"en": "Other school"}}
 
 
 def test_organization_fields_in_every_document(setup):
@@ -283,11 +283,59 @@ def test_organization_fields_in_every_document(setup):
     rows = rania.get(f"{url}document-values/?kind=consent_slips&template={template}").data
     assert [(r["template_code"], r["value"], r["source"]) for r in rows] == [
         (f"event.{org.code}_phone", None, "empty"),
-        (f"org.{org.code}_phone", "+961 1 234 567", "organization"),
+        (f"org.{org.code}_phone", {"en": "+961 1 234 567"}, "organization"),
     ]
     # Edited for one document: the organization keeps its value.
     values = json.dumps({f"org.{org.code}_phone": "+961 3 000 000"})
     res = rania.get(f"{url}export/", {"kind": "consent_slips", "template": template, "lang": "en", "values": values})
     assert res.status_code == 200
     assert "Call +961 3 000 000" in text_of(b"".join(res.streaming_content))
-    assert CustomField.objects.get(entity="organization").default == "+961 1 234 567"
+    assert CustomField.objects.get(entity="organization").default == {"en": "+961 1 234 567"}
+
+
+def test_values_in_english_and_arabic(setup):
+    rania, org = setup["rania"], setup["org"]
+    point = add_field(
+        rania, label_en="Meeting point", code="point", default={"en": "Scout hall", "ar": "قاعة الفوج"}
+    ).data
+    assert point["default"] == {"en": "Scout hall", "ar": "قاعة الفوج"}
+    only_en = add_field(rania, label_en="Bus", code="bus").data
+    size = add_field(
+        rania, label_en="Shirt", code="shirt", field_type="choice", options=["S", "M"],
+        option_labels={"S": {"en": "Small", "ar": "صغير"}, "M": {"en": "Medium"}, "XL": {"en": "gone"}},
+    ).data  # fmt: skip
+    assert size["option_labels"] == {
+        "S": {"en": "Small", "ar": "صغير"},
+        "M": {"en": "Medium"},
+    }  # unknown option dropped
+    # A single text without a language goes to the language it's written in.
+    event = rania.post(
+        EVENTS,
+        event_body(setup, custom_data={only_en["key"]: "Nakhoul Transport", size["key"]: "S"}),
+        format="json",
+    ).data
+    assert event["custom_data"][only_en["key"]] == {"en": "Nakhoul Transport"}
+    res = rania.patch(f"{EVENTS}{event['id']}/", {"custom_data": {only_en["key"]: "نخول للنقل"}}, format="json")
+    assert res.data["custom_data"][only_en["key"]] == {"ar": "نخول للنقل"}
+    rania.patch(
+        f"{EVENTS}{event['id']}/", {"custom_data": {only_en["key"]: {"en": "Nakhoul", "ar": ""}}}, format="json"
+    )
+
+    prefix = f"event.{org.code}_"
+    doc = make_docx("{{ " + prefix + "point }} | {{ " + prefix + "bus }} | {{ " + prefix + "shirt }}")
+    template = rania.post(
+        TEMPLATES, {"kind": "event_sheet", "name": "T", "file": SimpleUploadedFile("t.docx", doc)}
+    ).data["id"]
+    url = f"{EVENTS}{event['id']}/export/"
+
+    def export(lang, **values):
+        params = {"kind": "event_sheet", "template": template, "lang": lang}
+        if values:
+            params["values"] = json.dumps(values)
+        return text_of(b"".join(rania.get(url, params).streaming_content))
+
+    # Each language picks its own value, falling back to the other one when it's empty.
+    assert export("en") == "Scout hall | Nakhoul | Small"
+    assert export("ar") == "قاعة الفوج | Nakhoul | صغير"
+    # Edits for one document can be given per language too.
+    assert export("ar", **{f"{prefix}point": {"en": "Hall", "ar": "القاعة"}}).startswith("القاعة |")

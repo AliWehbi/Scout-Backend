@@ -19,6 +19,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
+from apps.customfields import services as custom_field_services
 from apps.units.models import Unit
 
 from . import services
@@ -236,8 +237,9 @@ def _custom_value(field: CustomField):
             return ""
         if field.field_type == FieldType.YES_NO:
             return label("yes_no", bool(raw), row.lang)
-        if field.field_type == FieldType.MULTI and isinstance(raw, list):
-            return _join(raw, row.lang)
+        if field.field_type in (FieldType.TEXT, FieldType.CHOICE, FieldType.MULTI):
+            # English or Arabic text and option labels, in the export's language.
+            return custom_field_services.display(field, raw, row.lang)
         if field.field_type == FieldType.DATE:
             try:
                 return date.fromisoformat(str(raw))

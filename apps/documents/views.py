@@ -162,6 +162,7 @@ def values_response(request, *, event, service, organization):
                 "label_ar": field.label_ar,
                 "field_type": field.field_type,
                 "options": field.options,
+                "option_labels": field.option_labels,
                 "value": value,
                 "source": source,
                 "event_value": (event.custom_data or {}).get(field.key) if field.entity == "event" else None,

@@ -1,3 +1,4 @@
+import re
 from datetime import date
 
 from django.utils import formats, translation
@@ -7,8 +8,35 @@ from rest_framework.exceptions import ValidationError
 
 from .models import CustomField, FieldType
 
-EMPTY = (None, "", [])
+EMPTY = (None, "", [], {})
 YES_NO = {True: ("Yes", "نعم"), False: ("No", "لا")}
+LANGS = ("en", "ar")
+ARABIC_RE = re.compile(r"[\u0600-\u06FF]")
+
+
+def guess_lang(text: str) -> str:
+    """For a single text with no language given (imports, older values): Arabic letters mean Arabic."""
+    return "ar" if ARABIC_RE.search(text) else "en"
+
+
+def localized_text(value) -> dict:
+    """A text value as {"en": ..., "ar": ...} (only the languages that have text)."""
+    if isinstance(value, dict):
+        pairs = ((lang, str(value.get(lang) or "").strip()[:500]) for lang in LANGS)
+        return {lang: text for lang, text in pairs if text}
+    text = str(value or "").strip()[:500]
+    return {guess_lang(text): text} if text else {}
+
+
+def pick(texts: dict, lang: str) -> str:
+    """The text in `lang`, else in the other language."""
+    other = "en" if lang == "ar" else "ar"
+    return texts.get(lang) or texts.get(other) or ""
+
+
+def option_label(field: CustomField, value, lang: str) -> str:
+    labels = (field.option_labels or {}).get(str(value)) or {}
+    return pick(labels, lang) or str(value)
 
 
 def clean_value(field: CustomField, value):
@@ -17,7 +45,7 @@ def clean_value(field: CustomField, value):
         return None
     t = field.field_type
     if t == FieldType.TEXT:
-        return str(value).strip()[:500]
+        return localized_text(value) or None
     if t == FieldType.NUMBER:
         try:
             number = float(value)
@@ -111,11 +139,15 @@ def display(field: CustomField, value, lang: str) -> str:
     if value in EMPTY:
         return ""
     t = field.field_type
+    if t == FieldType.TEXT:
+        return pick(localized_text(value), lang)
     if t == FieldType.YES_NO:
         pair = YES_NO.get(bool(value) if isinstance(value, bool) else value)
         return (pair[1] if lang == "ar" else pair[0]) if pair else str(value)
+    if t == FieldType.CHOICE:
+        return option_label(field, value, lang)
     if t == FieldType.MULTI and isinstance(value, list):
-        return ("، " if lang == "ar" else ", ").join(str(v) for v in value)
+        return ("، " if lang == "ar" else ", ").join(option_label(field, v, lang) for v in value)
     if t == FieldType.DATE:
         parsed = parse_date(str(value))
         if parsed:

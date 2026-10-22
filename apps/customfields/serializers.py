@@ -31,6 +31,7 @@ class CustomFieldSerializer(serializers.ModelSerializer):
             "label_ar",
             "field_type",
             "options",
+            "option_labels",
             "default",
             "applies_to",
             "event_types",
@@ -52,6 +53,18 @@ class CustomFieldSerializer(serializers.ModelSerializer):
         cleaned = [o.strip() for o in options]
         if len(cleaned) != len(set(cleaned)):
             raise serializers.ValidationError(_("Options must be unique."))
+        return cleaned
+
+    def validate_option_labels(self, labels):
+        if not isinstance(labels, dict):
+            raise serializers.ValidationError(_("Send the option labels as an object."))
+        cleaned = {}
+        for value, pair in labels.items():
+            if not isinstance(pair, dict):
+                raise serializers.ValidationError(_("Each option needs an English and an Arabic label."))
+            texts = services.localized_text({k: pair.get(k) for k in services.LANGS if isinstance(pair.get(k), str)})
+            if texts:
+                cleaned[str(value)] = texts
         return cleaned
 
     def validate_code(self, code):
@@ -76,6 +89,11 @@ class CustomFieldSerializer(serializers.ModelSerializer):
         options = attrs.get("options", getattr(instance, "options", []))
         if field_type in (FieldType.CHOICE, FieldType.MULTI) and not options:
             raise serializers.ValidationError({"options": _("Add at least one option.")})
+        if "option_labels" in attrs or "options" in attrs:
+            # Labels only for options that exist; other types have none.
+            labels = attrs.get("option_labels", getattr(instance, "option_labels", {}) or {})
+            keep = set(options) if field_type in (FieldType.CHOICE, FieldType.MULTI) else set()
+            attrs["option_labels"] = {k: v for k, v in labels.items() if k in keep}
 
         code = attrs.get("code", getattr(instance, "code", ""))
         if code:

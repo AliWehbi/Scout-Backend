@@ -481,11 +481,11 @@ class Command(BaseCommand):
         activity = EventType.objects.filter(organization=org, name_en="Activity").first()
         point = CustomField.objects.create(
             organization=org, entity="event", key="meeting_point", code="meeting_point", label_en="Meeting point",
-            label_ar="نقطة الالتقاء", default="Scout hall, Achrafieh", visible_to_parents=True, order=0,
+            label_ar="نقطة الالتقاء", default={"en": "Scout hall, Achrafieh", "ar": "قاعة الفوج، الأشرفية"}, visible_to_parents=True, order=0,
         )  # fmt: skip
         email = CustomField.objects.create(
             organization=org, entity="event", key="contact_email", code="contact_email", label_en="Contact email",
-            label_ar="بريد التواصل", default="camp@cedarscouts.org", visible_to_parents=True, order=1,
+            label_ar="بريد التواصل", default={"en": "camp@cedarscouts.org"}, visible_to_parents=True, order=1,
         )  # fmt: skip
         bus = CustomField.objects.create(
             organization=org, entity="event", key="bus_company", code="bus_company", label_en="Bus company",
@@ -500,18 +500,18 @@ class Command(BaseCommand):
         # Organization-wide fields: one value each, usable in every document.
         CustomField.objects.create(
             organization=org, entity="organization", key="phone", code="phone", label_en="Phone",
-            label_ar="الهاتف", default="+961 1 234 567", visible_to_parents=False, order=0,
+            label_ar="الهاتف", default={"en": "+961 1 234 567"}, visible_to_parents=False, order=0,
         )  # fmt: skip
         CustomField.objects.create(
             organization=org, entity="organization", key="address", code="address", label_en="Address",
-            label_ar="العنوان", default="Scout hall, Achrafieh, Beirut", visible_to_parents=False, order=1,
+            label_ar="العنوان", default={"en": "Scout hall, Achrafieh, Beirut", "ar": "قاعة الفوج، الأشرفية، بيروت"}, visible_to_parents=False, order=1,
         )  # fmt: skip
         camp = Event.objects.filter(organization=org, title__startswith="Autumn camp").first()
         if camp:
             camp.custom_data = {
-                point.key: "Scout hall, Achrafieh",
+                point.key: point.default,
                 email.key: email.default,
-                bus.key: "Nakhoul Transport",
+                bus.key: {"en": "Nakhoul Transport", "ar": "نخول للنقل"},
             }
             camp.save(update_fields=["custom_data"])
 
