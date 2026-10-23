@@ -20,6 +20,7 @@ from openpyxl.utils import get_column_letter
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.customfields import services as custom_field_services
+from apps.documents import xlsx
 from apps.units.models import Unit
 
 from . import services
@@ -364,52 +365,83 @@ def _safe(value):
     return value
 
 
-def write_workbook(rows: list[Row], req: ExportRequest, organization, service) -> bytes:
+def _columns(req: ExportRequest, organization, service):
     available = catalog(organization, service)
-    columns = [(key, available[key]) for key in req.fields]
-    ar = req.lang == "ar"
+    return [(key, available[key]) for key in req.fields]
 
+
+def write_table(ws, start_row, start_col, columns, rows: list[Row], lang: str, header_style=None, body_style=None):
+    """Header in `start_row`, one row per member below it; returns the column widths needed."""
+    ar = lang == "ar"
+    widths = []
+    for c, (_key, (en, label_ar, _section, _fn)) in enumerate(columns):
+        title = label_ar if ar else en
+        cell = ws.cell(row=start_row, column=start_col + c)
+        xlsx.set_text(cell, title)
+        if header_style:
+            xlsx.apply_style(cell, header_style)
+        else:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="E8EEF4")
+        widths.append(len(title))
+
+    for r, row in enumerate(rows, start=start_row + 1):
+        for c, (_key, (_en, _ar, _section, fn)) in enumerate(columns):
+            value = _safe(fn(row))
+            cell = ws.cell(row=r, column=start_col + c)
+            if body_style:
+                xlsx.apply_style(cell, body_style)
+            else:
+                cell.alignment = Alignment(vertical="top")
+            if isinstance(value, str):
+                # A member named "=HYPERLINK(...)" must stay text (formula injection).
+                xlsx.set_text(cell, value)
+                width = max((len(line) for line in value.splitlines()), default=0)
+            else:
+                cell.value = value
+                if isinstance(value, date):
+                    cell.number_format = "yyyy-mm-dd"
+                    width = 10
+                else:
+                    width = len(str(value))
+            widths[c] = max(widths[c], width)
+    return widths
+
+
+def _finish_table(ws, start_row, start_col, n_columns, n_rows, widths):
+    xlsx.column_widths(ws, start_col, widths)
+    if n_columns:
+        first = get_column_letter(start_col)
+        last = get_column_letter(start_col + n_columns - 1)
+        ws.auto_filter.ref = f"{first}{start_row}:{last}{start_row + max(n_rows, 0)}"
+    if start_row <= 15:  # keep the header (and whatever is above it) in view while scrolling
+        ws.freeze_panes = ws.cell(row=start_row + 1, column=1).coordinate
+
+
+def write_workbook(rows: list[Row], req: ExportRequest, organization, service) -> bytes:
+    """The built-in layout: the table from the first cell."""
+    columns = _columns(req, organization, service)
+    ar = req.lang == "ar"
     wb = Workbook()
     ws = wb.active
     ws.title = "الأعضاء" if ar else "Members"
     ws.sheet_view.rightToLeft = ar
-    header_fill = PatternFill("solid", fgColor="E8EEF4")
-    widths = []
-    for c, (_key, (en, label_ar, _section, _fn)) in enumerate(columns, start=1):
-        title = label_ar if ar else en
-        cell = ws.cell(row=1, column=c, value=title)
-        cell.data_type = "s"
-        cell.font = Font(bold=True)
-        cell.fill = header_fill
-        widths.append(len(title))
-
-    for r, row in enumerate(rows, start=2):
-        for c, (_key, (_en, _ar, _section, fn)) in enumerate(columns, start=1):
-            value = _safe(fn(row))
-            cell = ws.cell(row=r, column=c, value=value)
-            if isinstance(value, str):
-                # openpyxl stores text starting with "=" as a formula: a member named
-                # "=HYPERLINK(...)" must stay text (formula injection).
-                cell.data_type = "s"
-                if value[:1] in ("=", "+", "-", "@"):
-                    cell.quotePrefix = True
-                width = max((len(line) for line in value.splitlines()), default=0)
-            elif isinstance(value, date):
-                cell.number_format = "yyyy-mm-dd"
-                width = 10
-            else:
-                width = len(str(value))
-            widths[c - 1] = max(widths[c - 1], width)
-
-    for c, width in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(c)].width = min(max(width + 2, 8), 50)
-    for row_cells in ws.iter_rows(min_row=2):
-        for cell in row_cells:
-            cell.alignment = Alignment(vertical="top")
-    ws.freeze_panes = "A2"
-    if columns:
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{max(len(rows) + 1, 1)}"
-
+    widths = write_table(ws, 1, 1, columns, rows, req.lang)
+    _finish_table(ws, 1, 1, len(columns), len(rows), widths)
     out = BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+def write_from_template(
+    data: bytes, rows: list[Row], req: ExportRequest, organization, service, values: dict, logo
+) -> bytes:
+    """The organization's Excel template, filled: codes replaced and the table at {{ table }}."""
+    columns = _columns(req, organization, service)
+
+    def table(ws, start_row, start_col, header_style, body_style, make_room):
+        make_room(len(rows))
+        widths = write_table(ws, start_row, start_col, columns, rows, req.lang, header_style, body_style)
+        _finish_table(ws, start_row, start_col, len(columns), len(rows), widths)
+
+    return xlsx.render(data, values, logo, table)

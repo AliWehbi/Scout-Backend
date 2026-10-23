@@ -1,3 +1,4 @@
+import json
 from datetime import date
 
 from django.contrib.auth import get_user_model, password_validation
@@ -20,6 +21,10 @@ from apps.attendance.models import AttendanceRecord
 from apps.audit.services import log_action
 from apps.core.tenancy import TenantScopedMixin, get_active_membership
 from apps.customfields.serializers import CustomFieldSerializer
+from apps.documents import registry as document_registry
+from apps.documents import services as document_services
+from apps.documents import views as document_views
+from apps.documents.models import DocumentKind
 from apps.organizations.models import MembershipStatus, OrgMembership
 from apps.organizations.serializers import InvitationSerializer
 from apps.organizations.services import create_invitation, generate_username
@@ -572,17 +577,61 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         self._export_base()
         return Response(exporter.catalog_payload(self.organization, self.service))
 
+    def _list_template(self, params):
+        """`?template=<id>` an uploaded Excel template, `template=` the built-in layout, none: the default."""
+        raw = params.get("template")
+        data = {}
+        if raw is not None:
+            if raw and not str(raw).isdigit():
+                raise ValidationError({"template": [_("Unknown template.")]})
+            data["template"] = int(raw) if raw else None
+        return document_views.pick_template(data, self.organization, DocumentKind.MEMBERS_LIST)
+
+    @action(detail=False, methods=["get"], url_path="export/values")
+    def export_values(self, request):
+        """The organization fields the chosen Excel template uses, to check before exporting."""
+        self._export_base()
+        template = self._list_template(request.query_params)
+        return Response(document_services.list_value_rows(template, self.organization))
+
     @action(detail=False, methods=["get"])
     def export(self, request):
-        """Excel file of the chosen people and columns (`?fields=a,b&units=1,2&groups=leaders,members`)."""
+        """
+        Excel file of the chosen people and columns (`?fields=a,b&units=1,2&groups=leaders,members`),
+        in the organization's Excel template when there is one (`&template=`, `&values=` for this file).
+        """
         base = self._export_base()
         lang = request.query_params.get("lang") or request.LANGUAGE_CODE
         req = exporter.parse_request(
             request.query_params, self.organization, self.service, "ar" if lang == "ar" else "en"
         )
+        template = self._list_template(request.query_params)
+        raw_values = request.query_params.get("values") or ""
+        try:
+            values = json.loads(raw_values) if raw_values else {}
+        except ValueError:
+            raise ValidationError({"values": [_("Send the values as a JSON object.")]}) from None
+        if not isinstance(values, dict) or len(raw_values) > 20000:
+            raise ValidationError({"values": [_("Send the values as a JSON object.")]})
+        overrides = document_views.clean_overrides(values, self.organization, ("organization",))
         rows = exporter.build_rows(base, req, self.service)
+        if template is None:
+            content = exporter.write_workbook(rows, req, self.organization, self.service)
+        else:
+            codes = document_registry.list_values(
+                self.organization, lang=req.lang, user=request.user, count=len(rows), overrides=overrides
+            )
+            content = exporter.write_from_template(
+                document_services.stored_bytes(template),
+                rows,
+                req,
+                self.organization,
+                self.service,
+                codes,
+                document_services.logo_png(self.organization),
+            )
         response = HttpResponse(
-            exporter.write_workbook(rows, req, self.organization, self.service),
+            content,
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         response["Content-Disposition"] = 'attachment; filename="members.xlsx"'
@@ -598,6 +647,7 @@ class MemberViewSet(TenantScopedMixin, viewsets.ModelViewSet):
                 "units": req.unit_ids,
                 "groups": req.groups,
                 "medical_fields": medical,
+                "template": template.pk if template else None,
             },
         )
         return response

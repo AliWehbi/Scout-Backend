@@ -6,7 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from . import registry, services
-from .models import DocumentKind, DocumentTemplate
+from .models import EVENT_KINDS, DocumentKind, DocumentTemplate
 
 
 class DocumentTemplateSerializer(serializers.ModelSerializer):
@@ -81,8 +81,11 @@ class DocumentTemplateSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
+EVENT_KIND_CHOICES = [(k.value, k.label) for k in EVENT_KINDS]
+
+
 class ExportParamsSerializer(serializers.Serializer):
-    kind = serializers.ChoiceField(choices=DocumentKind.choices)
+    kind = serializers.ChoiceField(choices=EVENT_KIND_CHOICES)
     template = serializers.IntegerField(required=False, allow_null=True, min_value=1)
     lang = serializers.ChoiceField(choices=registry.LANGS, required=False)
     date = serializers.DateField(required=False, allow_null=True)
@@ -102,7 +105,7 @@ class ExportParamsSerializer(serializers.Serializer):
 
 
 class ValuesParamsSerializer(serializers.Serializer):
-    kind = serializers.ChoiceField(choices=DocumentKind.choices)
+    kind = serializers.ChoiceField(choices=EVENT_KIND_CHOICES)
     template = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
 

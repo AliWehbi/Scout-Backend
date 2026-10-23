@@ -269,10 +269,11 @@ def test_organization_fields_in_every_document(setup):
     # The same name can be an event field too: codes live under their own root.
     add_field(rania, label_en="Phone on site", code="phone")
 
-    # Usable in every kind of document.
+    # Usable in every kind of document; event fields only in the event documents.
     for kind in rania.get(f"{TEMPLATES}fields/").data:
         names = [f["name"] for f in kind["fields"] if f.get("custom")]
-        assert f"org.{org.code}_phone" in names and f"event.{org.code}_phone" in names
+        assert f"org.{org.code}_phone" in names
+        assert (f"event.{org.code}_phone" in names) == (kind["kind"] != "members_list")
 
     doc = make_docx("Call {{ org." + org.code + "_phone }}", "On site {{ event." + org.code + "_phone }}")
     res = rania.post(TEMPLATES, {"kind": "consent_slips", "name": "Slips", "file": SimpleUploadedFile("s.docx", doc)})

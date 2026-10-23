@@ -277,7 +277,7 @@ def test_default_switches_and_delete_removes_file(setup, client_for, django_capt
 def test_fields_and_starters(setup, client_for):
     admin = client_for(setup["admin"].user, setup["org"])
     kinds = {k["kind"]: k for k in admin.get(f"{URL}fields/").data}
-    assert set(kinds) == {"event_sheet", "attendance_sheet", "consent_slips"}
+    assert set(kinds) == {"event_sheet", "attendance_sheet", "consent_slips", "members_list"}
     names = [f["name"] for f in kinds["consent_slips"]["fields"]]
     assert "event.title" in names and "slips" in names
     for kind in kinds:
@@ -286,7 +286,9 @@ def test_fields_and_starters(setup, client_for):
             assert res.status_code == 200
             # every built-in template must pass the same checks as an upload
             data = b"".join(res.streaming_content)
-            assert upload(admin, data, kind=kind, name=f"{kind} {lang}").status_code == 201
+            ext = "xlsx" if kind == "members_list" else "docx"
+            res = upload(admin, data, kind=kind, name=f"{kind} {lang}", filename=f"starter.{ext}")
+            assert res.status_code == 201, res.data
     assert admin.get(f"{URL}starter/", {"kind": "secrets"}).status_code == 400
 
 

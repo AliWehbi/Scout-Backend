@@ -11,12 +11,24 @@ class DocumentKind(models.TextChoices):
     EVENT_SHEET = "event_sheet", _("Event sheet")
     ATTENDANCE_SHEET = "attendance_sheet", _("Attendance sheet")
     CONSENT_SLIPS = "consent_slips", _("Consent slips")
+    MEMBERS_LIST = "members_list", _("Members list (Excel)")
+
+
+# Event documents are Word files; lists are Excel files.
+EVENT_KINDS = (DocumentKind.EVENT_SHEET, DocumentKind.ATTENDANCE_SHEET, DocumentKind.CONSENT_SLIPS)
+EXCEL_KINDS = (DocumentKind.MEMBERS_LIST,)
+
+
+def file_format(kind: str) -> str:
+    return "xlsx" if kind in EXCEL_KINDS else "docx"
 
 
 class DocumentTemplate(TenantModel):
     """
-    A Word template an organization uploaded for one kind of document. Placeholders use
-    Jinja syntax (`{{ event.title }}`) and are filled in a sandbox, see `rendering.py`.
+    A template an organization uploaded for one kind of document. Event documents are Word files
+    whose placeholders use Jinja syntax (`{{ event.title }}`), filled in a sandbox (`rendering.py`).
+    Lists are Excel files: codes are replaced as plain text and the data is written where
+    `{{ table }}` is (`xlsx.py`).
     """
 
     kind = models.CharField(max_length=20, choices=DocumentKind.choices)

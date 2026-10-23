@@ -18,7 +18,7 @@ from apps.events import services as event_services
 from apps.events.models import Event
 from apps.members.models import GuardianLink
 
-from .models import DocumentKind
+from .models import EXCEL_KINDS, DocumentKind
 
 LANGS = ("en", "ar")
 
@@ -244,8 +244,42 @@ def field_value(field: CustomField, event: Event):
     return custom_field_services.value_or_default(field, event)
 
 
+# Excel lists: codes are replaced as plain text; {{ table }} marks where the data starts.
+LIST_FIELDS = [
+    f("table", "Where the list starts (alone in its cell)", "مكان بداية القائمة (وحده في الخلية)"),
+    f("org.name", "Organization name", "اسم المنظمة"),
+    f("org.logo", "Organization logo (alone in its cell)", "شعار المنظمة (وحده في الخلية)"),
+    f("generated_at", "Date and time of export", "تاريخ ووقت التصدير"),
+    f("generated_by", "Exported by", "صدّره"),
+    f("count", "Number of rows in the list", "عدد الصفوف في القائمة"),
+]
+
+
 def fields_for(kind: str, organization=None) -> list[dict]:
+    if kind in EXCEL_KINDS:
+        # Lists aren't about one event: only the organization's own fields apply.
+        org_items = [i for i in custom_items(organization) if i["entity"] == "organization"]
+        return org_items + LIST_FIELDS
     return custom_items(organization) + COMMON_FIELDS + KIND_FIELDS[kind]
+
+
+def list_codes(organization) -> set[str]:
+    return {item["name"] for item in fields_for(DocumentKind.MEMBERS_LIST, organization)}
+
+
+def list_values(organization, *, lang: str, user, count: int, overrides: dict | None = None) -> dict[str, str]:
+    """Text for each code of an Excel list ({{ table }} and {{ org.logo }} are handled apart)."""
+    values = {
+        "org.name": organization.name,
+        "generated_at": fmt_datetime(timezone.now(), lang, organization.timezone),
+        "generated_by": user.full_name if user else "",
+        "count": str(count),
+    }
+    for field in coded_fields(organization, ("organization",)):
+        code = field.template_code(organization.code)
+        value = overrides[code] if overrides and code in overrides else field.default
+        values[code] = custom_field_services.display(field, value, lang)
+    return values
 
 
 def allowed_roots(kind: str) -> frozenset[str]:

@@ -16,7 +16,7 @@ from apps.customfields import services as custom_field_services
 from apps.permissions.drf import HasOrgPermission
 
 from . import registry, services
-from .models import DocumentKind, DocumentTemplate
+from .models import DocumentKind, DocumentTemplate, file_format
 from .serializers import (
     DocumentTemplateSerializer,
     ExportParamsSerializer,
@@ -32,8 +32,12 @@ class DocumentThrottle(UserRateThrottle):
     rate = "30/min"
 
 
-def docx_response(data: bytes, filename: str) -> FileResponse:
-    response = FileResponse(io.BytesIO(data), as_attachment=True, filename=filename, content_type=services.DOCX_MIME)
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def docx_response(data: bytes, filename: str, fmt: str = "docx") -> FileResponse:
+    mime = XLSX_MIME if fmt == "xlsx" else services.DOCX_MIME
+    response = FileResponse(io.BytesIO(data), as_attachment=True, filename=filename, content_type=mime)
     response["X-Content-Type-Options"] = "nosniff"
     response["Cache-Control"] = "no-store"
     return response
@@ -84,10 +88,11 @@ class DocumentTemplateViewSet(TenantScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["get"])
     def download(self, request, pk=None):
         template = self.get_object()
-        name = template.original_filename or f"{template.name}.docx"
-        if not name.lower().endswith(".docx"):
-            name += ".docx"
-        return docx_response(services.stored_bytes(template), services.clean_filename(name))
+        fmt = file_format(template.kind)
+        name = template.original_filename or f"{template.name}.{fmt}"
+        if not name.lower().endswith(f".{fmt}"):
+            name += f".{fmt}"
+        return docx_response(services.stored_bytes(template), services.clean_filename(name), fmt)
 
     @action(detail=False, methods=["get"])
     def fields(self, request):
@@ -103,10 +108,11 @@ class DocumentTemplateViewSet(TenantScopedMixin, viewsets.ModelViewSet):
         params = StarterParamsSerializer(data=request.query_params)
         params.is_valid(raise_exception=True)
         kind, lang = params.validated_data["kind"], params.validated_data["lang"]
-        return docx_response(services.starter_bytes(kind, lang), f"{kind}.{lang}.docx")
+        fmt = file_format(kind)
+        return docx_response(services.starter_bytes(kind, lang), f"{kind}.{lang}.{fmt}", fmt)
 
 
-def _pick_template(data, organization, kind) -> DocumentTemplate | None:
+def pick_template(data, organization, kind) -> DocumentTemplate | None:
     if data.get("template"):
         return get_object_or_404(DocumentTemplate, organization=organization, kind=kind, pk=data["template"])
     if "template" in data:  # explicitly null: the built-in template
@@ -114,9 +120,9 @@ def _pick_template(data, organization, kind) -> DocumentTemplate | None:
     return services.default_template(organization, kind)
 
 
-def _clean_overrides(raw: dict, organization) -> dict:
+def clean_overrides(raw: dict, organization, entities=registry.DOCUMENT_ENTITIES) -> dict:
     """Per-document values, by template code (event.cedar_bus, org.cedar_phone), checked like stored values."""
-    fields = {f.template_code(organization.code): f for f in registry.coded_fields(organization)}
+    fields = {f.template_code(organization.code): f for f in registry.coded_fields(organization, entities)}
     cleaned, errors = {}, {}
     for code, value in raw.items():
         field = fields.get(code)
@@ -143,7 +149,7 @@ def values_response(request, *, event, service, organization):
     kind = data["kind"]
     if kind not in services.allowed_kinds(service, event):
         raise PermissionDenied(_("You can't export this document for this event."))
-    template = _pick_template(data, organization, kind)
+    template = pick_template(data, organization, kind)
     if template is None:
         return Response([])  # the built-in templates only use the app's own fields
     used = services.used_custom_codes(services.stored_bytes(template), organization.code)
@@ -180,13 +186,13 @@ def export_response(request, *, event, service, organization):
     kind = data["kind"]
     if kind not in services.allowed_kinds(service, event):
         raise PermissionDenied(_("You can't export this document for this event."))
-    overrides = _clean_overrides(data.get("values") or {}, organization)
+    overrides = clean_overrides(data.get("values") or {}, organization)
     lang = data.get("lang") or (request.LANGUAGE_CODE if request.LANGUAGE_CODE in registry.LANGS else "en")
     day = data.get("date")
     if kind == DocumentKind.ATTENDANCE_SHEET and day is not None and day not in event.days:
         raise ValidationError({"date": [_("This day isn't part of the event.")]})
 
-    template = _pick_template(data, organization, kind)
+    template = pick_template(data, organization, kind)
     document = services.export_event(
         event, kind=kind, template=template, lang=lang, user=request.user, day=day, overrides=overrides
     )

@@ -15,10 +15,10 @@ from rest_framework.exceptions import APIException, ValidationError
 
 from apps.events import services as event_services
 
-from . import registry
-from .models import DocumentKind, DocumentTemplate
+from . import registry, xlsx
+from .models import EXCEL_KINDS, DocumentKind, DocumentTemplate, file_format
 from .rendering import RenderError, RenderJob, render_docx
-from .safety import MAX_UPLOAD_BYTES, inspect_docx
+from .safety import MAX_UPLOAD_BYTES, inspect, inspect_docx
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +61,17 @@ def _render(job: RenderJob, *, upload: bool) -> bytes:
 
 def read_upload(upload, kind: str, organization=None) -> bytes:
     """Returns the bytes of a safe template that fills in correctly, or raises a ValidationError."""
-    if not (upload.name or "").lower().endswith(".docx"):
-        raise ValidationError({"file": [_("Upload a Word document (.docx).")]})
+    fmt = file_format(kind)
+    if not (upload.name or "").lower().endswith(f".{fmt}"):
+        message = _("Upload an Excel workbook (.xlsx).") if fmt == "xlsx" else _("Upload a Word document (.docx).")
+        raise ValidationError({"file": [message]})
     if upload.size > MAX_UPLOAD_BYTES:
         raise ValidationError({"file": [_("The template must be 5 MB or smaller.")]})
     data = upload.read(MAX_UPLOAD_BYTES + 1)
+    if fmt == "xlsx":
+        inspect(data, fmt)
+        xlsx.check_template(data, registry.list_codes(organization))
+        return data
     inspect_docx(data)
     _render(
         RenderJob(
@@ -94,6 +100,8 @@ def clean_filename(name: str, limit: int = 120) -> str:
 def starter_bytes(kind: str, lang: str) -> bytes:
     if kind not in DocumentKind.values or lang not in registry.LANGS:
         raise ValidationError(_("Unknown document."))
+    if kind in EXCEL_KINDS:
+        return xlsx.starter(lang)
     return (DEFAULTS_DIR / f"{kind}.{lang}.docx").read_bytes()
 
 
@@ -105,7 +113,7 @@ def stored_bytes(template: DocumentTemplate) -> bytes:
         logger.error("Document template %s does not match its checksum", template.pk)
         raise DocumentError(_("This template file was changed on the server. Upload it again."))
     try:
-        inspect_docx(data)
+        inspect(data, file_format(template.kind))
     except ValidationError:
         raise DocumentError(_("This template can't be used any more. Upload it again.")) from None
     return data
@@ -187,3 +195,31 @@ def used_custom_codes(data: bytes, org_code: str) -> set[str]:
                 text = _TAG_RE.sub(b"", zf.read(info))
                 found.update(f"{root.decode()}.{name.decode()}" for root, name in pattern.findall(text))
     return found
+
+
+def list_value_rows(template: DocumentTemplate | None, organization) -> list[dict]:
+    """The organization fields an Excel template uses, with their value, to check before exporting."""
+    if template is None:
+        return []
+    used = xlsx.used_codes(stored_bytes(template))
+    rows = []
+    for field in registry.coded_fields(organization, ("organization",)):
+        code = field.template_code(organization.code)
+        if code in used:
+            rows.append(
+                {
+                    "code": field.code,
+                    "entity": field.entity,
+                    "template_code": code,
+                    "label_en": field.label_en,
+                    "label_ar": field.label_ar,
+                    "field_type": field.field_type,
+                    "options": field.options,
+                    "option_labels": field.option_labels,
+                    "value": field.default,
+                    "source": "organization" if field.default not in (None, "", [], {}) else "empty",
+                    "event_value": None,
+                    "default": field.default,
+                }
+            )
+    return rows
